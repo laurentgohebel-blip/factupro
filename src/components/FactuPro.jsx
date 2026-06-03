@@ -33,22 +33,17 @@ const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
-function sendDocByEmail(type, doc, client, signature, entreprise) {
+function buildEmailContent(type, doc, client, entreprise) {
   const isF = type === "facture";
   const ti = isF ? "Facture" : "Devis";
   const ht = tl(doc.lignes);
   const tv = doc.tva || 10;
-  const tot = ht * (1 + tv / 100);
   const e = entreprise || {};
-
+  const ibanLine = e.iban ? `\nIBAN : ${e.iban}` : "";
   const subject = `${ti} ${doc.id} — ${e.nom || "FactuPro"}`;
-
   const lignesText = doc.lignes.map(l =>
     `  • ${l.desc} : ${l.qte} ${l.unite} × ${fmt(l.pu)} = ${fmt(l.qte * l.pu)}`
   ).join("\n");
-
-  const ibanLine = e.iban ? `\nIBAN : ${e.iban}` : "";
-
   const body = `Bonjour ${client?.nom || ""},
 
 Veuillez trouver en pièce jointe votre ${ti.toLowerCase()} ${doc.id} du ${dfr(doc.date)}.
@@ -57,7 +52,7 @@ ${lignesText}
 
 Total HT : ${fmt(ht)}
 TVA (${tv}%) : ${fmt(ht * tv / 100)}
-Total TTC : ${fmt(tot)}
+Total TTC : ${fmt(ht * (1 + tv / 100))}
 
 ${isF ? `Date d'échéance : ${dfr(doc.echeance)}\nMerci de procéder au règlement dans les délais.${ibanLine}` : `Ce devis est valable jusqu'au ${dfr(doc.validite)}.`}
 
@@ -66,9 +61,56 @@ ${e.nom || ""}
 ${e.tel || ""} — ${e.email || ""}
 ${e.adresse || ""}
 SIRET : ${e.siret || ""}`;
+  return { subject, body, to: client?.email || "" };
+}
 
-  const mailto = `mailto:${client?.email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  window.open(mailto, '_blank');
+function EmailModal({ type, doc, client, signature, entreprise, onClose }) {
+  const { subject, body, to } = buildEmailContent(type, doc, client, entreprise);
+  const [copied, setCopied] = useState(false);
+  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  function copyText() {
+    navigator.clipboard.writeText(`À : ${to}\nObjet : ${subject}\n\n${body}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
+      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, maxHeight: "85vh", display: "flex", flexDirection: "column", animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ fontSize: 17, fontWeight: 700 }}>✉ Envoyer par email</h3>
+          <button onClick={onClose} style={{ background: T.bgElevated, border: "none", cursor: "pointer", color: T.textMuted, width: 32, height: 32, borderRadius: "50%", fontSize: 16 }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>À</div>
+          <div style={{ fontSize: 14, fontWeight: 600, background: T.bgElevated, padding: "8px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}` }}>{to || "—"}</div>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Objet</div>
+          <div style={{ fontSize: 13, background: T.bgElevated, padding: "8px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}` }}>{subject}</div>
+        </div>
+        <div style={{ marginBottom: 16, flex: 1, minHeight: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Message</div>
+          <div style={{ fontSize: 12, background: T.bgElevated, padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, overflowY: "auto", maxHeight: 200, whiteSpace: "pre-wrap", lineHeight: 1.6, color: T.text }}>{body}</div>
+        </div>
+
+        <div style={{ background: T.accentPale, border: `1px solid ${T.accent}`, borderRadius: T.radiusXs, padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#92400E" }}>
+          💡 Téléchargez le PDF depuis l'aperçu, puis joignez-le à votre email.
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-press" onClick={copyText} style={{ flex: 1, padding: "11px 0", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: copied ? T.primaryLighter : T.text }}>
+            {copied ? "✓ Copié !" : "📋 Copier le texte"}
+          </button>
+          <a href={mailto} style={{ flex: 1, padding: "11px 0", borderRadius: T.radiusXs, border: "none", background: T.primary, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#fff", textAlign: "center", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            ✉ Ouvrir ma messagerie
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ══════════════ CSV EXPORT ══════════════ */
@@ -901,6 +943,7 @@ export default function FactuPro() {
   const [dup, setDup] = useState(null);
   const [toast, setToast] = useState(null);
   const [payPick, setPayPick] = useState(null);
+  const [emailModal, setEmailModal] = useState(null); // { type, doc, client, signature }
 
   const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
   const nav = p => { setPg(p); setSelD(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
@@ -925,6 +968,7 @@ export default function FactuPro() {
         await signerDevis(selD.dbId, sig);
         setShowSig(false); fl("Devis signé ✓");
       }} />}
+      {emailModal && <EmailModal {...emailModal} entreprise={entreprise} onClose={() => setEmailModal(null)} />}
       {payPick && <PayPicker onClose={() => setPayPick(null)} onSel={async mode => {
         await marquerPayee(payPick, mode);
         setPayPick(null); fl("Paiement enregistré ✓");
@@ -964,7 +1008,7 @@ export default function FactuPro() {
           onBack={() => setSelD(null)}
           onSign={() => setShowSig(true)}
           onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
-          onEmail={() => { sendDocByEmail("devis", selD, cls.find(c => c.id === selD.clientId), selD.signature, entreprise); fl("Email ouvert — pensez à joindre le PDF ✉"); }}
+          onEmail={() => setEmailModal({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature })}
           onDup={() => { setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
           onConvert={async () => {
             try {
@@ -1007,7 +1051,7 @@ export default function FactuPro() {
 
         {pg === "factures" && <FacturesList factures={fcs} clients={cls}
           onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
-          onEmail={f => { sendDocByEmail("facture", f, cls.find(c => c.id === f.clientId), null, entreprise); fl("Email ouvert — pensez à joindre le PDF ✉"); }}
+          onEmail={f => setEmailModal({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null })}
           onPay={id => setPayPick(id)}
           onNew={() => nav("nouvelle_facture")}
         />}
