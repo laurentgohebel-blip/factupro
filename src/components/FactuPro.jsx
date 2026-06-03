@@ -73,7 +73,11 @@ SIRET : ${e.siret || ""}`;
   // Puis ouvre l'email client avec le corps pré-rempli (délai pour laisser le PDF s'ouvrir)
   setTimeout(() => {
     const mailto = `mailto:${client?.email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = mailto;
+    const a = document.createElement('a');
+    a.href = mailto;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }, 800);
 }
 
