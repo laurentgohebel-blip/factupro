@@ -67,18 +67,8 @@ ${e.tel || ""} — ${e.email || ""}
 ${e.adresse || ""}
 SIRET : ${e.siret || ""}`;
 
-  // Ouvre le PDF dans un nouvel onglet pour que l'artisan puisse le sauvegarder
-  openPrintablePDF(type, doc, client, signature, entreprise);
-
-  // Puis ouvre l'email client avec le corps pré-rempli (délai pour laisser le PDF s'ouvrir)
-  setTimeout(() => {
-    const mailto = `mailto:${client?.email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    const a = document.createElement('a');
-    a.href = mailto;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, 800);
+  const mailto = `mailto:${client?.email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.open(mailto, '_blank');
 }
 
 /* ══════════════ CSV EXPORT ══════════════ */
@@ -974,7 +964,7 @@ export default function FactuPro() {
           onBack={() => setSelD(null)}
           onSign={() => setShowSig(true)}
           onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
-          onEmail={() => sendDocByEmail("devis", selD, cls.find(c => c.id === selD.clientId), selD.signature, entreprise)}
+          onEmail={() => { sendDocByEmail("devis", selD, cls.find(c => c.id === selD.clientId), selD.signature, entreprise); fl("Email ouvert — pensez à joindre le PDF ✉"); }}
           onDup={() => { setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
           onConvert={async () => {
             try {
@@ -1017,7 +1007,7 @@ export default function FactuPro() {
 
         {pg === "factures" && <FacturesList factures={fcs} clients={cls}
           onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
-          onEmail={f => sendDocByEmail("facture", f, cls.find(c => c.id === f.clientId), null, entreprise)}
+          onEmail={f => { sendDocByEmail("facture", f, cls.find(c => c.id === f.clientId), null, entreprise); fl("Email ouvert — pensez à joindre le PDF ✉"); }}
           onPay={id => setPayPick(id)}
           onNew={() => nav("nouvelle_facture")}
         />}
