@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from './supabase'
 
 const AuthContext = createContext({})
@@ -7,6 +8,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [entreprise, setEntreprise] = useState(null)
   const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
 
   async function loadEntreprise(userId) {
     try {
@@ -93,6 +95,7 @@ export function AuthProvider({ children }) {
   async function signIn(email, password) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+    navigate('/app')
     return data
   }
 
@@ -100,6 +103,7 @@ export function AuthProvider({ children }) {
     await supabase.auth.signOut()
     setUser(null)
     setEntreprise(null)
+    navigate('/')
   }
 
   async function updateEntreprise(updates) {
