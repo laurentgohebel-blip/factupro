@@ -1,7 +1,17 @@
 {
+  "routes": [
+    {
+      "route": "/app",
+      "rewrite": "/index.html"
+    },
+    {
+      "route": "/login",
+      "rewrite": "/index.html"
+    }
+  ],
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "*.svg", "*.png"]
+    "exclude": ["/assets/*", "*.svg", "*.png", "*.js", "*.css", "*.ico", "*.webmanifest"]
   },
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
