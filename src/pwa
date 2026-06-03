@@ -1,0 +1,17 @@
+export function registerPWA() {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+      const reg = await navigator.serviceWorker.register('/sw.js')
+      
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'activated') {
+            // Nouvelle version activée, recharger
+            window.location.reload()
+          }
+        })
+      })
+    })
+  }
+}

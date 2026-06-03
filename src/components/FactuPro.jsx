@@ -1,0 +1,1049 @@
+import { useState, useRef, useEffect } from "react";
+import { useAuth } from '../lib/auth';
+import { useClients, useDevis, useFactures, useCatalogue } from '../lib/data';
+
+/* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
+function normClient(c) { return c; } // same format
+function normCat(c) { return { id: c.id, cat: c.categorie, desc: c.description, unite: c.unite, pu: parseFloat(c.prix_unitaire) }; }
+function normDevis(d) {
+  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), notes: d.notes || '',
+    lignes: (d.devis_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
+    _raw: d };
+}
+function normFacture(f) {
+  let statut = f.statut;
+  if (statut === 'envoyee' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
+    statut = 'en_retard';
+  }
+  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+    relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
+    lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
+    _raw: f };
+}
+
+/* ══════════════ UTILS ══════════════ */
+const tl = (l) => l.reduce((s, x) => s + x.qte * x.pu, 0);
+const fmt = (n) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+const fmtShort = (n) => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + "k €" : fmt(n);
+const dfr = (d) => new Date(d).toLocaleDateString("fr-FR");
+const dd = (a, b) => Math.floor((new Date(b) - new Date(a)) / 86400000);
+const tod = () => new Date().toISOString().slice(0, 10);
+const in30 = () => new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
+const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
+
+/* ══════════════ EMAIL ══════════════ */
+function sendDocByEmail(type, doc, client, signature, entreprise) {
+  const isF = type === "facture";
+  const ti = isF ? "Facture" : "Devis";
+  const ht = tl(doc.lignes);
+  const tv = doc.tva || 10;
+  const tot = ht * (1 + tv / 100);
+  const e = entreprise || {};
+
+  const subject = `${ti} ${doc.id} — ${e.nom || "FactuPro"}`;
+
+  const lignesText = doc.lignes.map(l =>
+    `  • ${l.desc} : ${l.qte} ${l.unite} × ${fmt(l.pu)} = ${fmt(l.qte * l.pu)}`
+  ).join("\n");
+
+  const ibanLine = e.iban ? `\nIBAN : ${e.iban}` : "";
+
+  const body = `Bonjour ${client?.nom || ""},
+
+Veuillez trouver en pièce jointe votre ${ti.toLowerCase()} ${doc.id} du ${dfr(doc.date)}.
+
+${lignesText}
+
+Total HT : ${fmt(ht)}
+TVA (${tv}%) : ${fmt(ht * tv / 100)}
+Total TTC : ${fmt(tot)}
+
+${isF ? `Date d'échéance : ${dfr(doc.echeance)}\nMerci de procéder au règlement dans les délais.${ibanLine}` : `Ce devis est valable jusqu'au ${dfr(doc.validite)}.`}
+
+Cordialement,
+${e.nom || ""}
+${e.tel || ""} — ${e.email || ""}
+${e.adresse || ""}
+SIRET : ${e.siret || ""}`;
+
+  // Ouvre le PDF dans un nouvel onglet pour que l'artisan puisse le sauvegarder
+  openPrintablePDF(type, doc, client, signature, entreprise);
+
+  // Puis ouvre l'email client avec le corps pré-rempli (délai pour laisser le PDF s'ouvrir)
+  setTimeout(() => {
+    const mailto = `mailto:${client?.email || ""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+  }, 800);
+}
+
+/* ══════════════ CSV EXPORT ══════════════ */
+function exportCSV(factures, clients) {
+  const headers = ["Numéro", "Date", "Client", "Email client", "Montant HT", "TVA %", "Montant TVA", "Montant TTC", "Statut", "Mode paiement", "Date paiement", "Échéance"];
+
+  const rows = factures.map(f => {
+    const cl = clients.find(c => c.id === f.clientId);
+    const ht = tl(f.lignes);
+    const tv = f.tva || 10;
+    const tva = ht * tv / 100;
+    const tot = ht + tva;
+    return [
+      f.id,
+      f.date,
+      cl?.nom || "",
+      cl?.email || "",
+      ht.toFixed(2),
+      tv,
+      tva.toFixed(2),
+      tot.toFixed(2),
+      f.statut,
+      f.paiement || "",
+      f.datePaiement || "",
+      f.echeance || "",
+    ];
+  });
+
+  const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(";")).join("\n");
+  const BOM = "\uFEFF"; // pour Excel français
+  const blob = new Blob([BOM + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `FactuPro_Export_${tod()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportDevisCSV(devis, clients) {
+  const headers = ["Numéro", "Date", "Validité", "Client", "Email client", "Montant HT", "TVA %", "Montant TTC", "Statut"];
+
+  const rows = devis.map(d => {
+    const cl = clients.find(c => c.id === d.clientId);
+    const ht = tl(d.lignes);
+    const tv = d.tva || 10;
+    return [
+      d.id, d.date, d.validite || "", cl?.nom || "", cl?.email || "",
+      ht.toFixed(2), tv, (ht * (1 + tv / 100)).toFixed(2), d.statut,
+    ];
+  });
+
+  const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(";")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `FactuPro_Devis_${tod()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ══════════════ CSS ══════════════ */
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
+@keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes countUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes barGrow { from { height: 0; } }
+.fade-up { animation: fadeUp .5s cubic-bezier(.16,1,.3,1) both; }
+.fade-up-1 { animation-delay: .05s; } .fade-up-2 { animation-delay: .1s; } .fade-up-3 { animation-delay: .15s; } .fade-up-4 { animation-delay: .2s; } .fade-up-5 { animation-delay: .25s; }
+.card-hover { transition: transform .2s, box-shadow .2s; } .card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+.btn-press { transition: all .15s; } .btn-press:active { transform: scale(.97); }
+.bar-animate { animation: barGrow .6s cubic-bezier(.16,1,.3,1) both; }
+.toast-anim { animation: fadeUp .3s cubic-bezier(.16,1,.3,1) both; }
+.gradient-header { background: linear-gradient(135deg, #1B4332 0%, #2D6A4F 50%, #40916C 100%); position: relative; overflow: hidden; }
+.gradient-header::after { content: ''; position: absolute; top: -50%; right: -20%; width: 200px; height: 200px; background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%); border-radius: 50%; pointer-events: none; }
+.search-glow:focus { border-color: #40916C; box-shadow: 0 0 0 3px rgba(64,145,108,0.15); }
+::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #D1D5C8; border-radius: 4px; }
+`;
+
+/* ══════════════ TOKENS ══════════════ */
+const T = {
+  font: "'Outfit', system-ui, sans-serif",
+  primary: "#1B4332", primaryLight: "#2D6A4F", primaryLighter: "#40916C", primaryPale: "#D8F3DC",
+  accent: "#F59E0B", accentPale: "#FEF3C7", danger: "#DC2626", dangerPale: "#FEE2E2", info: "#2563EB", infoPale: "#DBEAFE",
+  bg: "#F7F6F3", bgCard: "#FFFFFF", bgElevated: "#FDFCFA",
+  border: "#E8E5DE", borderLight: "#F0EDE6",
+  text: "#1A1A18", textMuted: "#7A7A72", textLight: "#A3A39B",
+  radius: 14, radiusSm: 10, radiusXs: 7,
+  shadow: "0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03)",
+  shadowMd: "0 4px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04)",
+  shadowLg: "0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)",
+};
+
+/* ══════════════ SMALL COMPONENTS ══════════════ */
+function Badge({ statut }) {
+  const m = { en_attente:["En attente",T.accentPale,"#92400E",T.accent], accepte:["Accepté",T.primaryPale,"#065F46","#10B981"], refuse:["Refusé",T.dangerPale,"#991B1B",T.danger], payee:["Payée",T.primaryPale,"#065F46","#10B981"], en_retard:["En retard",T.dangerPale,"#991B1B",T.danger], envoyee:["Envoyée",T.infoPale,"#1E40AF",T.info], facture:["Facturé","#E0E7FF","#3730A3","#6366F1"], signe:["Signé",T.primaryPale,"#065F46","#10B981"] };
+  const s = m[statut] || [statut,"#E5E7EB","#374151","#9CA3AF"];
+  return <span style={{ background: s[1], color: s[2], padding: "4px 10px 4px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: s[3], flexShrink: 0 }} />{s[0]}</span>;
+}
+
+function Toast({ m }) { return m ? <div className="toast-anim" style={{ position: "fixed", top: 70, left: "50%", transform: "translateX(-50%)", background: T.primary, color: "#fff", padding: "10px 22px", borderRadius: 12, fontSize: 13, fontWeight: 600, zIndex: 200, boxShadow: T.shadowLg, display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>✓ {m}</div> : null; }
+
+function Confirm({ msg, onOk, onNo }) {
+  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, animation: "fadeIn .2s" }} onClick={onNo}>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 24, width: "100%", maxWidth: 320, boxShadow: T.shadowLg }} onClick={e => e.stopPropagation()}>
+      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Confirmation</div>
+      <div style={{ fontSize: 14, color: T.textMuted, marginBottom: 20, lineHeight: 1.5 }}>{msg}</div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button className="btn-press" onClick={onNo} style={{ padding: "8px 16px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Annuler</button>
+        <button className="btn-press" onClick={onOk} style={{ padding: "8px 16px", borderRadius: T.radiusXs, border: "none", background: T.dangerPale, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>Supprimer</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function Search({ v, set, ph }) {
+  return <div style={{ position: "relative", marginBottom: 12 }}>
+    <svg style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.textLight, pointerEvents: "none" }} width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    <input className="search-glow" style={{ width: "100%", padding: "10px 36px 10px 38px", borderRadius: T.radiusSm, border: `1px solid ${T.border}`, fontSize: 13, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgCard }} placeholder={ph || "Rechercher..."} value={v} onChange={e => set(e.target.value)} />
+    {v && <button onClick={() => set("")} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: T.textLight, fontSize: 16 }}>×</button>}
+  </div>;
+}
+
+function Chips({ opts, val, set }) {
+  return <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+    {opts.map(o => <button key={o.v} className="btn-press" onClick={() => set(val === o.v ? null : o.v)} style={{ padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none", background: val === o.v ? T.primary : T.bgElevated, color: val === o.v ? "#fff" : T.textMuted, boxShadow: val === o.v ? "none" : `inset 0 0 0 1px ${T.border}` }}>{o.l}</button>)}
+  </div>;
+}
+
+function StatCard({ label, value, color, icon, sub, delay, onClick }) {
+  return <div className={`fade-up fade-up-${delay} card-hover`} onClick={onClick} style={{ background: T.bgCard, borderRadius: T.radius, padding: "18px 16px", boxShadow: T.shadow, cursor: onClick ? "pointer" : "default", position: "relative", overflow: "hidden" }}>
+    <div style={{ position: "absolute", top: 12, right: 14, fontSize: 22, opacity: 0.15 }}>{icon}</div>
+    <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 }}>{label}</div>
+    <div style={{ fontSize: 24, fontWeight: 800, color: color || T.primary, letterSpacing: -0.5, lineHeight: 1, animation: "countUp .5s cubic-bezier(.16,1,.3,1) both" }}>{value}</div>
+    {sub && <div style={{ fontSize: 11, color: T.textLight, marginTop: 4 }}>{sub}</div>}
+  </div>;
+}
+
+/* ── Modals ── */
+function CatPicker({ cat, onSel, onClose }) {
+  const [q, setQ] = useState(""); const [c, setC] = useState(null);
+  const cs = [...new Set(cat.map(x => x.cat))];
+  const f = cat.filter(x => (!c || x.cat === c) && (!q || x.desc.toLowerCase().includes(q.toLowerCase())));
+  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
+    <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}><h3 style={{ fontSize: 17, fontWeight: 700 }}>Catalogue</h3><button onClick={onClose} style={{ background: T.bgElevated, border: "none", cursor: "pointer", color: T.textMuted, width: 32, height: 32, borderRadius: "50%", fontSize: 16 }}>×</button></div>
+      <Search v={q} set={setQ} /><Chips opts={cs.map(x => ({ v: x, l: x }))} val={c} set={setC} />
+      {f.map(x => <div key={x.id} className="card-hover" onClick={() => { onSel(x); onClose(); }} style={{ padding: "12px 14px", borderBottom: `1px solid ${T.borderLight}`, cursor: "pointer", display: "flex", justifyContent: "space-between", borderRadius: T.radiusXs }}>
+        <div><div style={{ fontSize: 13, fontWeight: 600 }}>{x.desc}</div><div style={{ fontSize: 11, color: T.textMuted }}>{x.cat} · {x.unite}</div></div>
+        <div style={{ fontWeight: 700, fontSize: 13, color: T.primary }}>{fmt(x.pu)}</div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function SigPad({ onSave, onNo }) {
+  const ref = useRef(null), dr = useRef(false), lp = useRef({ x: 0, y: 0 });
+  useEffect(() => { const c = ref.current, ctx = c.getContext("2d"); c.width = c.offsetWidth * 2; c.height = c.offsetHeight * 2; ctx.scale(2, 2); ctx.strokeStyle = T.text; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; }, []);
+  const gp = e => { const r = ref.current.getBoundingClientRect(), t = e.touches ? e.touches[0] : e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
+  const ev = { onMouseDown: e => { e.preventDefault(); dr.current = true; lp.current = gp(e); }, onMouseMove: e => { if (!dr.current) return; const p = gp(e), ctx = ref.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(lp.current.x, lp.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); lp.current = p; }, onMouseUp: () => { dr.current = false; }, onMouseLeave: () => { dr.current = false; }, onTouchStart: e => { e.preventDefault(); dr.current = true; lp.current = gp(e); }, onTouchMove: e => { if (!dr.current) return; const p = gp(e), ctx = ref.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(lp.current.x, lp.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); lp.current = p; }, onTouchEnd: () => { dr.current = false; } };
+  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onNo}>
+    <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+      <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Signature client</h3>
+      <p style={{ fontSize: 12, color: T.textMuted, marginBottom: 14 }}>Signez ci-dessous</p>
+      <div style={{ border: `2px dashed ${T.border}`, borderRadius: 12, overflow: "hidden", background: "#FAFAF8", marginBottom: 14 }}><canvas ref={ref} style={{ width: "100%", height: 160, touchAction: "none", cursor: "crosshair" }} {...ev} /></div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn-press" onClick={() => { ref.current.getContext("2d").clearRect(0, 0, ref.current.width, ref.current.height); }} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Effacer</button>
+        <div style={{ flex: 1 }} />
+        <button className="btn-press" onClick={onNo} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Annuler</button>
+        <button className="btn-press" onClick={() => onSave(ref.current.toDataURL("image/png"))} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Valider</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
+  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva, isF = type === "facture", ti = isF ? "FACTURE" : "DEVIS";
+  const e = entreprise || {};
+  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, overflowY: "auto", padding: "16px 8px", animation: "fadeIn .2s" }}>
+    <div style={{ background: "#fff", width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadowLg }}>
+      <div className="gradient-header" style={{ color: "#fff", padding: "10px 16px", display: "flex", justifyContent: "space-between", position: "relative", zIndex: 2 }}>
+        <span style={{ fontWeight: 700, fontSize: 13 }}>📄 {ti} {doc.id}</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => openPrintablePDF(type, doc, client, signature, entreprise)} style={{ background: "rgba(255,255,255,0.25)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ PDF</button>
+          {type === "facture" && <button onClick={() => downloadFacturX(doc, client, entreprise)} style={{ background: "rgba(255,255,255,0.25)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Factur-X</button>}
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✕</button>
+        </div>
+      </div>
+      <div style={{ padding: 20, fontFamily: T.font, fontSize: 11 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: T.primary }}>⚡ FactuPro</div>
+            <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>{e.nom}</div>
+            <div style={{ fontSize: 9, color: "#666" }}>{e.adresse}</div>
+            <div style={{ fontSize: 9, color: "#666" }}>{e.tel} — {e.email}</div>
+            <div style={{ fontSize: 8, color: "#999", marginTop: 2 }}>SIRET {e.siret} — TVA {e.tva_intra}</div>
+          </div>
+          <div style={{ textAlign: "right" }}><div style={{ fontSize: 14, fontWeight: 800, color: T.primary }}>{ti}</div><div style={{ fontSize: 12, fontWeight: 700 }}>{doc.id}</div><div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{dfr(doc.date)}</div></div>
+        </div>
+        <div style={{ background: T.primaryPale, borderRadius: 8, padding: 10, marginBottom: 14 }}>
+          <div style={{ fontSize: 8, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", marginBottom: 2 }}>Client</div>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>{client?.nom}</div><div style={{ fontSize: 10, color: "#555" }}>{client?.adresse}</div>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }}>
+          <thead><tr style={{ background: T.primary, color: "#fff" }}><th style={{ padding: 5, textAlign: "left", fontSize: 8 }}>Description</th><th style={{ padding: 5, textAlign: "center", fontSize: 8 }}>Qté</th><th style={{ padding: 5, textAlign: "right", fontSize: 8 }}>P.U.</th><th style={{ padding: 5, textAlign: "right", fontSize: 8 }}>Total</th></tr></thead>
+          <tbody>{doc.lignes.map((l, i) => <tr key={i} style={{ borderBottom: `1px solid ${T.borderLight}` }}><td style={{ padding: 5 }}>{l.desc}</td><td style={{ padding: 5, textAlign: "center" }}>{l.qte} {l.unite}</td><td style={{ padding: 5, textAlign: "right" }}>{fmt(l.pu)}</td><td style={{ padding: 5, textAlign: "right", fontWeight: 600 }}>{fmt(l.qte * l.pu)}</td></tr>)}</tbody>
+        </table>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}><div style={{ width: 170 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "#888" }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 15, fontWeight: 800, color: T.primary, borderTop: `2px solid ${T.primary}`, marginTop: 3 }}><span>TTC</span><span>{fmt(tot)}</span></div>
+        </div></div>
+        {signature && <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 8, color: "#888" }}>Bon pour accord</div><img src={signature} alt="" style={{ height: 45 }}/></div></div>}
+        {type === "facture" && <div style={{ marginTop: 14 }}>
+          <div style={{ padding: 10, background: "#f0f7f2", borderRadius: 6, fontSize: 9, color: "#555", lineHeight: 1.6, marginBottom: 6 }}>
+            <strong style={{ color: T.primary }}>Mentions obligatoires</strong><br/>
+            Catégorie : Prestation de services · Adresse livraison : {client?.adresse || "id. facturation"}<br/>
+            SIREN : {(e.siret || "").slice(0, 11)} · TVA Intra : {e.tva_intra || "N/A"}
+          </div>
+          <div style={{ padding: 10, background: "#f8f8f5", borderRadius: 6, fontSize: 9, color: "#888", lineHeight: 1.6, marginBottom: 6 }}>
+            Paiement 30j · Échéance : {dfr(doc.echeance)} · Pénalité retard : 3× taux légal + 40€
+          </div>
+          <div style={{ padding: 6, background: "#e8f5e9", borderRadius: 6, fontSize: 8, color: "#2E7D32", textAlign: "center" }}>
+            ✓ Facture Factur-X (EN 16931)
+          </div>
+        </div>}
+      </div>
+    </div>
+  </div>;
+}
+
+function PayPicker({ onSel, onClose }) {
+  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
+    <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+      <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 14 }}>Mode de paiement</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {PAIEMENTS.map(p => <button key={p.v} className="card-hover btn-press" onClick={() => onSel(p.v)} style={{ background: T.bgElevated, border: `1px solid ${T.border}`, borderRadius: T.radius, padding: 18, textAlign: "center", cursor: "pointer", fontFamily: T.font }}><div style={{ fontSize: 30, marginBottom: 6 }}>{p.i}</div><div style={{ fontSize: 14, fontWeight: 600 }}>{p.l}</div></button>)}
+      </div>
+    </div>
+  </div>;
+}
+
+/* ══════════════ PAGES ══════════════ */
+function Dashboard({ devis, factures, clients, onNav }) {
+  const ca = factures.filter(f => f.statut === "payee").reduce((s, f) => s + ttc(f), 0);
+  const att = factures.filter(f => f.statut !== "payee").reduce((s, f) => s + ttc(f), 0);
+  const dc = devis.filter(d => d.statut === "en_attente").length;
+  const ret = factures.filter(f => f.statut === "en_retard").length;
+  const conv = devis.length > 0 ? Math.round(devis.filter(d => ["accepte", "facture"].includes(d.statut)).length / devis.length * 100) : 0;
+  const mois = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
+  const ma = new Date().getMonth();
+  const bars = Array.from({ length: 6 }, (_, i) => { const m = (ma - 5 + i + 12) % 12; return { m: mois[m], t: factures.filter(f => new Date(f.date).getMonth() === m && f.statut === "payee").reduce((s, f) => s + ttc(f), 0) }; });
+  const mx = Math.max(...bars.map(b => b.t), 1);
+  const recent = [...devis.map(d => ({ ...d, _t: "devis" })), ...factures.map(f => ({ ...f, _t: "facture" }))].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 3);
+
+  return <div>
+    {ret > 0 && <div className="fade-up card-hover" onClick={() => onNav("relances")} style={{ background: `linear-gradient(135deg, ${T.dangerPale}, #FFF1F2)`, border: "1px solid #FECACA", borderRadius: T.radius, padding: "14px 16px", marginBottom: 16, cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ width: 40, height: 40, borderRadius: 12, background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🔔</div>
+      <div><div style={{ fontSize: 14, fontWeight: 700, color: "#991B1B" }}>{ret} facture{ret > 1 ? "s" : ""} en retard</div><div style={{ fontSize: 12, color: "#B91C1C" }}>Relancer →</div></div>
+    </div>}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+      <StatCard label="CA encaissé" value={fmtShort(ca)} icon="💰" delay={1} />
+      <StatCard label="En attente" value={fmtShort(att)} color={att > 0 ? "#B45309" : T.primary} icon="⏳" delay={2} />
+      <StatCard label="Devis en cours" value={dc} icon="📄" delay={3} sub={`${conv}% convertis`} />
+      <StatCard label="Clients" value={clients.length} icon="👥" delay={4} onClick={() => onNav("clients")} />
+    </div>
+    <div className="fade-up fade-up-3" style={{ background: T.bgCard, borderRadius: T.radius, padding: "20px 18px", boxShadow: T.shadow, marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 16 }}>Chiffre d'affaires</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 90 }}>
+        {bars.map((b, i) => <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: T.primary, marginBottom: 4, opacity: b.t > 0 ? 1 : 0 }}>{fmtShort(b.t)}</div>
+          <div className="bar-animate" style={{ width: "100%", maxWidth: 34, background: i === 5 ? `linear-gradient(180deg, ${T.primaryLighter}, ${T.primary})` : T.primaryPale, borderRadius: "6px 6px 3px 3px", height: Math.max(4, (b.t / mx) * 60), animationDelay: `${i * .08}s` }} />
+          <div style={{ fontSize: 10, color: i === 5 ? T.primary : T.textLight, marginTop: 6, fontWeight: 600 }}>{b.m}</div>
+        </div>)}
+      </div>
+    </div>
+    <div className="fade-up fade-up-4" style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Actions rapides</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn-press" onClick={() => onNav("nouveau_devis")} style={{ flex: 1, padding: 14, borderRadius: T.radius, border: "none", background: T.primary, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>+ Nouveau devis</button>
+        <button className="btn-press" onClick={() => onNav("analytics")} style={{ padding: "14px 18px", borderRadius: T.radius, border: `1.5px solid ${T.border}`, background: T.bgCard, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📊</button>
+      </div>
+    </div>
+    {recent.length > 0 && <div className="fade-up fade-up-5" style={{ marginTop: 20 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Activité récente</div>
+      {recent.map(item => { const cl = clients.find(c => c.id === item.clientId); return <div key={item.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "12px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: item._t === "devis" ? T.infoPale : T.primaryPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{item._t === "devis" ? "📄" : "🧾"}</div>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{item.id} — {cl?.nom}</div><div style={{ fontSize: 11, color: T.textMuted }}>{dfr(item.date)}</div></div>
+        <div style={{ textAlign: "right" }}><div style={{ fontSize: 13, fontWeight: 700, color: T.primary }}>{fmtShort(ttc(item))}</div><Badge statut={item.statut} /></div>
+      </div>; })}
+    </div>}
+  </div>;
+}
+
+function ClientsList({ clients, onSelect, onAdd }) {
+  const [q, setQ] = useState("");
+  const f = clients.filter(c => !q || c.nom.toLowerCase().includes(q.toLowerCase()) || (c.tel||"").includes(q));
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Clients ({clients.length})</div><button className="btn-press" onClick={onAdd} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Ajouter</button></div>
+    <Search v={q} set={setQ} ph="Nom, téléphone..." />
+    {f.map(c => <div key={c.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }} onClick={() => onSelect(c)}>
+      <div style={{ width: 40, height: 40, borderRadius: 12, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14 }}>{c.nom.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
+      <div style={{ flex: 1 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{c.nom}</div><div style={{ fontSize: 12, color: T.textMuted }}>{c.tel}</div></div><div style={{ color: T.textLight }}>→</div>
+    </div>)}
+  </div>;
+}
+
+function ClientForm({ client, onSave, onNo }) {
+  const [f, setF] = useState(client || { nom: "", tel: "", email: "", adresse: "", notes: "" });
+  const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{client ? "Modifier" : "Nouveau client"}</h2></div>
+    {[["nom","Nom complet"],["tel","Téléphone"],["email","Email"],["adresse","Adresse"]].map(([k, l]) => <div key={k} style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" }}>{l}</label><input className="search-glow" style={inputStyle} value={f[k]||""} onChange={e => setF({ ...f, [k]: e.target.value })} /></div>)}
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes</label><textarea className="search-glow" style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={f.notes||""} onChange={e => setF({ ...f, notes: e.target.value })} /></div>
+    <button className="btn-press" style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font }} onClick={() => onSave(f)}>Enregistrer</button>
+  </div>;
+}
+
+function ClientProfil({ client, devis, factures, onBack, onEdit }) {
+  const dvs = devis.filter(d => d.clientId === client.id);
+  const fcs = factures.filter(f => f.clientId === client.id);
+  const ca = fcs.filter(f => f.statut === "payee").reduce((s, f) => s + ttc(f), 0);
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
+      <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{client.nom}</h2>
+      <button className="btn-press" onClick={onEdit} style={{ padding: "7px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Modifier</button>
+    </div>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 12 }}>
+      {client.adresse && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>📍 {client.adresse}</div>}
+      {client.tel && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>📞 {client.tel}</div>}
+      {client.email && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>✉ {client.email}</div>}
+      {client.notes && <div style={{ marginTop: 8, fontSize: 12, color: T.textMuted, fontStyle: "italic", borderTop: `1px solid ${T.borderLight}`, paddingTop: 8 }}>{client.notes}</div>}
+    </div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+      <StatCard label="CA encaissé" value={fmtShort(ca)} icon="💰" delay={1} />
+      <StatCard label="Devis" value={dvs.length} icon="📄" delay={2} />
+      <StatCard label="Factures" value={fcs.length} icon="🧾" delay={3} />
+    </div>
+    {dvs.length > 0 && <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Devis</div>
+      {dvs.slice(0, 5).map(d => <div key={d.id} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div><div style={{ fontSize: 13, fontWeight: 600 }}>{d.id}</div><div style={{ fontSize: 11, color: T.textMuted }}>{dfr(d.date)}</div></div>
+        <div style={{ textAlign: "right" }}><div style={{ fontSize: 13, fontWeight: 700 }}>{fmt(ttc(d))}</div><Badge statut={d.statut} /></div>
+      </div>)}
+    </div>}
+    {fcs.length > 0 && <div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Factures</div>
+      {fcs.slice(0, 5).map(f => <div key={f.id} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div><div style={{ fontSize: 13, fontWeight: 600 }}>{f.id}</div><div style={{ fontSize: 11, color: T.textMuted }}>{dfr(f.date)}</div></div>
+        <div style={{ textAlign: "right" }}><div style={{ fontSize: 13, fontWeight: 700 }}>{fmt(ttc(f))}</div><Badge statut={f.statut} /></div>
+      </div>)}
+    </div>}
+  </div>;
+}
+
+function DevisList({ devis, clients, onSelect, onNew }) {
+  const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
+  const f = devis.filter(d => { const cl = clients.find(c => c.id === d.clientId); return (!q || d.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || d.statut === fi); });
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Devis ({devis.length})</div><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouveau</button></div>
+    <Search v={q} set={setQ} ph="N°, client..." /><Chips opts={[{ v: "en_attente", l: "En attente" }, { v: "accepte", l: "Accepté" }, { v: "facture", l: "Facturé" }]} val={fi} set={setFi} />
+    {f.map(d => { const cl = clients.find(c => c.id === d.clientId); return <div key={d.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }} onClick={() => onSelect(d)}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{d.id}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom} · {dfr(d.date)}</div></div><div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(d))}</div><div style={{ marginTop: 4 }}><Badge statut={d.statut} /></div></div></div>
+    </div>; })}
+  </div>;
+}
+
+function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail }) {
+  const ht = tl(devis.lignes), tv = devis.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2><Badge statut={devis.statut} /></div>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Client</div><div style={{ fontWeight: 600, fontSize: 15 }}>{client?.nom}</div><div style={{ fontSize: 12, color: T.textMuted }}>{client?.adresse}</div>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12 }}><span><span style={{ color: T.textMuted }}>Date</span> {dfr(devis.date)}</span><span><span style={{ color: T.textMuted }}>TVA</span> {tv}%</span></div>
+    </div>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
+      {devis.lignes.map((l, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: i < devis.lignes.length - 1 ? `1px solid ${T.borderLight}` : "none" }}><div><div style={{ fontSize: 13, fontWeight: 500 }}>{l.desc}</div><div style={{ fontSize: 11, color: T.textMuted }}>{l.qte} {l.unite} × {fmt(l.pu)}</div></div><div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(l.qte * l.pu)}</div></div>)}
+      <div style={{ borderTop: `2px solid ${T.primary}`, marginTop: 8, paddingTop: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textMuted }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary, marginTop: 4 }}><span>TTC</span><span>{fmt(tot)}</span></div>
+      </div>
+    </div>
+    {devis.notes && <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, boxShadow: T.shadow, marginBottom: 10 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, marginBottom: 4 }}>Notes</div><div style={{ fontSize: 13, color: T.text, lineHeight: 1.6 }}>{devis.notes}</div></div>}
+    {devis.signature && <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, boxShadow: T.shadow, marginBottom: 10 }}><div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted }}>Signature ✍</div><img src={devis.signature} alt="" style={{ height: 50, marginTop: 6 }}/></div>}
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {!devis.signature && devis.statut === "en_attente" && <button className="btn-press" onClick={onSign} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✍ Signer</button>}
+      {(devis.statut === "accepte" || devis.signature) && devis.statut !== "facture" && <button className="btn-press" onClick={onConvert} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>→ Facturer</button>}
+      <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
+      <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
+      <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>
+      <button className="btn-press" onClick={onDelete} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>🗑</button>
+    </div>
+  </div>;
+}
+
+function DevisForm({ clients, onSave, onNo, catalogue, init }) {
+  const [cId, setCId] = useState(init?.clientId || clients[0]?.id || "");
+  const [ls, setLs] = useState(init?.lignes?.map(l => ({ ...l })) || [{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
+  const [tv, setTv] = useState(init?.tva || 10);
+  const [notes, setNotes] = useState(init?.notes || "");
+  const [showC, setShowC] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const uL = (i, k, v) => { const n = [...ls]; n[i] = { ...n[i], [k]: k === "qte" || k === "pu" ? parseFloat(v) || 0 : v }; setLs(n); };
+  const inputStyle = { width: "100%", padding: "8px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, fontWeight: 600, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{init ? "Dupliquer" : "Nouveau devis"}</h2></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase" }}>Prestations</label>
+      <button className="btn-press" onClick={() => setShowC(true)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Catalogue</button>
+    </div>
+    {ls.map((l, i) => <div key={i} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 12, marginBottom: 8, boxShadow: T.shadow }}>
+      <input className="search-glow" style={{ ...inputStyle, marginBottom: 6 }} placeholder="Description" value={l.desc} onChange={e => uL(i, "desc", e.target.value)} />
+      <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ width: 55 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Qté</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} type="number" value={l.qte} onChange={e => uL(i, "qte", e.target.value)} /></div>
+        <div style={{ flex: 1 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Unité</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} value={l.unite} onChange={e => uL(i, "unite", e.target.value)}>{["forfait","m²","ml","unité","heure","jour"].map(u => <option key={u}>{u}</option>)}</select></div>
+        <div style={{ width: 75 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>P.U.</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} type="number" value={l.pu} onChange={e => uL(i, "pu", e.target.value)} /></div>
+        <button onClick={() => ls.length > 1 && setLs(ls.filter((_, j) => j !== i))} style={{ alignSelf: "flex-end", background: "none", border: "none", color: T.danger, cursor: "pointer", padding: 6, fontSize: 14 }}>×</button>
+      </div>
+    </div>)}
+    <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 14 }}>+ Ajouter une ligne</button>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(tl(ls) * (1 + tv / 100))}</span></div>
+    </div>
+    <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions particulières, délais, remarques..." /></div>
+    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
+    {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
+  </div>;
+}
+
+function FacturesList({ factures, clients, onPDF, onPay, onEmail, onNew }) {
+  const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
+  const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div>
+    <Search v={q} set={setQ} /><Chips opts={[{ v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
+    {f.map(x => { const cl = clients.find(c => c.id === x.clientId); const p = PAIEMENTS.find(y => y.v === x.paiement); return <div key={x.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{x.id}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div>{p && <div style={{ fontSize: 11, marginTop: 3 }}>{p.i} {p.l}</div>}</div>
+      <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(x))}</div><div style={{ marginTop: 4 }}><Badge statut={x.statut} /></div>
+        <div style={{ display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" }}>
+          <button className="btn-press" onClick={() => onPDF(x)} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄</button>
+            <button className="btn-press" onClick={() => onEmail(x)} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉</button>
+          {x.statut !== "payee" && <button className="btn-press" onClick={() => onPay(x.dbId || x.id)} style={{ padding: "4px 8px", borderRadius: 6, border: "none", background: T.primary, color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰</button>}
+        </div>
+      </div></div>
+    </div>; })}
+  </div>;
+}
+
+function Relances({ factures, clients, onRelance, onPaid }) {
+  const ov = factures.filter(f => f.statut !== "payee" && dd(f.echeance, tod()) > 0);
+  const pe = factures.filter(f => f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
+  return <div>
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Relances</div>
+    {ov.map(f => { const cl = clients.find(c => c.id === f.clientId); return <div key={f.id} className="fade-up" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, borderLeft: `4px solid ${T.danger}` }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>{f.id} — {cl?.nom}</div>
+      <div style={{ fontSize: 12, color: T.danger, fontWeight: 600, marginTop: 2 }}>⚠ {dd(f.echeance, tod())}j de retard · {fmt(ttc(f))}</div>
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <button className="btn-press" onClick={() => onRelance(f.dbId || f.id)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Relancer</button>
+        <button className="btn-press" onClick={() => onPaid(f.dbId || f.id)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✓ Payée</button>
+      </div>
+    </div>; })}
+    {pe.map(f => { const cl = clients.find(c => c.id === f.clientId); return <div key={f.id} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, borderLeft: `4px solid ${T.accent}` }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>{f.id} — {cl?.nom}</div>
+      <div style={{ fontSize: 12, color: "#92400E", marginTop: 2 }}>J-{dd(tod(), f.echeance)} · {fmt(ttc(f))}</div>
+      <button className="btn-press" onClick={() => onPaid(f.dbId || f.id)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font, marginTop: 6 }}>✓ Payée</button>
+    </div>; })}
+    {ov.length + pe.length === 0 && <div style={{ textAlign: "center", padding: 30, color: T.textMuted }}><div style={{ fontSize: 36, marginBottom: 8 }}>🎉</div><div style={{ fontWeight: 600 }}>Tout est à jour !</div></div>}
+  </div>;
+}
+
+function Analytics({ factures, devis, clients, onExportFactures, onExportDevis }) {
+  const payees = factures.filter(f => f.statut === "payee");
+  const caByClient = {};
+  payees.forEach(f => { const cl = clients.find(c => c.id === f.clientId); caByClient[cl?.nom || "?"] = (caByClient[cl?.nom || "?"] || 0) + ttc(f); });
+  const caArr = Object.entries(caByClient).sort((a, b) => b[1] - a[1]);
+  const maxCA = Math.max(...caArr.map(x => x[1]), 1);
+  const delai = payees.filter(f => f.datePaiement).length > 0 ? Math.round(payees.filter(f => f.datePaiement).reduce((s, f) => s + dd(f.date, f.datePaiement), 0) / payees.filter(f => f.datePaiement).length) : 0;
+  const conv = devis.length > 0 ? Math.round(devis.filter(d => ["accepte", "facture"].includes(d.statut)).length / devis.length * 100) : 0;
+  return <div>
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Statistiques</div>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+      <StatCard label="Délai" value={`${delai}j`} icon="⏱" delay={1} /><StatCard label="Conversion" value={`${conv}%`} icon="📈" delay={2} /><StatCard label="Payées" value={payees.length} icon="✓" delay={3} />
+    </div>
+    <div className="fade-up fade-up-4" style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 12 }}>CA par client</div>
+      {caArr.map(([nom, ca]) => <div key={nom} style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}><span style={{ fontWeight: 600 }}>{nom}</span><span style={{ fontWeight: 700, color: T.primary }}>{fmt(ca)}</span></div>
+        <div style={{ background: T.borderLight, borderRadius: 4, height: 6, overflow: "hidden" }}><div style={{ background: `linear-gradient(90deg, ${T.primary}, ${T.primaryLighter})`, height: "100%", borderRadius: 4, width: `${(ca / maxCA) * 100}%` }} /></div>
+      </div>)}
+      {caArr.length === 0 && <div style={{ fontSize: 13, color: T.textMuted, textAlign: "center", padding: 16 }}>Aucune donnée</div>}
+    </div>
+
+    <div className="fade-up fade-up-5" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Export comptable</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn-press card-hover" onClick={onExportFactures} style={{ flex: 1, background: T.bgCard, borderRadius: T.radiusSm, padding: 14, border: `1px solid ${T.border}`, cursor: "pointer", fontFamily: T.font, textAlign: "center", boxShadow: T.shadow }}>
+          <div style={{ fontSize: 24, marginBottom: 4 }}>🧾</div>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>Factures CSV</div>
+          <div style={{ fontSize: 10, color: T.textMuted, marginTop: 2 }}>{factures.length} factures</div>
+        </button>
+        <button className="btn-press card-hover" onClick={onExportDevis} style={{ flex: 1, background: T.bgCard, borderRadius: T.radiusSm, padding: 14, border: `1px solid ${T.border}`, cursor: "pointer", fontFamily: T.font, textAlign: "center", boxShadow: T.shadow }}>
+          <div style={{ fontSize: 24, marginBottom: 4 }}>📄</div>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>Devis CSV</div>
+          <div style={{ fontSize: 10, color: T.textMuted, marginTop: 2 }}>{devis.length} devis</div>
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: T.textLight, marginTop: 8, textAlign: "center" }}>Compatible Excel · Séparateur point-virgule · Encodage UTF-8</div>
+    </div>
+  </div>;
+}
+
+/* ══════════════ PDF DOWNLOAD + FACTUR-X ══════════════ */
+
+function generateFacturXml(doc, client, ent) {
+  const e = ent || {};
+  const ht = tl(doc.lignes);
+  const tv = doc.tva || 10;
+  const tva = ht * tv / 100;
+  const tot = ht + tva;
+  const dateXml = (doc.date || tod()).replace(/-/g, "");
+  const echeanceXml = (doc.echeance || in30()).replace(/-/g, "");
+
+  const lignesXml = doc.lignes.map((l, i) => `
+    <ram:IncludedSupplyChainTradeLineItem>
+      <ram:AssociatedDocumentLineDocument><ram:LineID>${i + 1}</ram:LineID></ram:AssociatedDocumentLineDocument>
+      <ram:SpecifiedTradeProduct><ram:Name>${l.desc.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</ram:Name></ram:SpecifiedTradeProduct>
+      <ram:SpecifiedLineTradeAgreement>
+        <ram:NetPriceProductTradePrice><ram:ChargeAmount>${l.pu.toFixed(2)}</ram:ChargeAmount></ram:NetPriceProductTradePrice>
+      </ram:SpecifiedLineTradeAgreement>
+      <ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="${l.unite === 'heure' ? 'HUR' : l.unite === 'm²' ? 'MTK' : l.unite === 'ml' ? 'MTR' : 'C62'}">${l.qte}</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery>
+      <ram:SpecifiedLineTradeSettlement>
+        <ram:ApplicableTradeTax><ram:TypeCode>VAT</ram:TypeCode><ram:CategoryCode>S</ram:CategoryCode><ram:RateApplicablePercent>${tv}</ram:RateApplicablePercent></ram:ApplicableTradeTax>
+        <ram:SpecifiedTradeSettlementLineMonetarySummation><ram:LineTotalAmount>${(l.qte * l.pu).toFixed(2)}</ram:LineTotalAmount></ram:SpecifiedTradeSettlementLineMonetarySummation>
+      </ram:SpecifiedLineTradeSettlement>
+    </ram:IncludedSupplyChainTradeLineItem>`).join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+  xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
+  xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100"
+  xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:100">
+
+  <rsm:ExchangedDocumentContext>
+    <ram:GuidelineSpecifiedDocumentContextParameter>
+      <ram:ID>urn:factur-x.eu:1p0:basicwl</ram:ID>
+    </ram:GuidelineSpecifiedDocumentContextParameter>
+  </rsm:ExchangedDocumentContext>
+
+  <rsm:ExchangedDocument>
+    <ram:ID>${doc.id}</ram:ID>
+    <ram:TypeCode>380</ram:TypeCode>
+    <ram:IssueDateTime><udt:DateTimeString format="102">${dateXml}</udt:DateTimeString></ram:IssueDateTime>
+  </rsm:ExchangedDocument>
+
+  <rsm:SupplyChainTradeTransaction>
+    <ram:ApplicableHeaderTradeAgreement>
+      <ram:SellerTradeParty>
+        <ram:Name>${(e.nom || '').replace(/&/g,"&amp;")}</ram:Name>
+        <ram:SpecifiedLegalOrganization><ram:ID schemeID="0002">${e.siret || ''}</ram:ID></ram:SpecifiedLegalOrganization>
+        <ram:PostalTradeAddress><ram:LineOne>${(e.adresse || '').replace(/&/g,"&amp;")}</ram:LineOne><ram:CountryID>FR</ram:CountryID></ram:PostalTradeAddress>
+        <ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${e.tva_intra || ''}</ram:ID></ram:SpecifiedTaxRegistration>
+      </ram:SellerTradeParty>
+      <ram:BuyerTradeParty>
+        <ram:Name>${(client?.nom || '').replace(/&/g,"&amp;")}</ram:Name>
+        <ram:PostalTradeAddress><ram:LineOne>${(client?.adresse || '').replace(/&/g,"&amp;")}</ram:LineOne><ram:CountryID>FR</ram:CountryID></ram:PostalTradeAddress>
+      </ram:BuyerTradeParty>
+    </ram:ApplicableHeaderTradeAgreement>
+
+    <ram:ApplicableHeaderTradeDelivery>
+      <ram:ActualDeliverySupplyChainEvent><ram:OccurrenceDateTime><udt:DateTimeString format="102">${dateXml}</udt:DateTimeString></ram:OccurrenceDateTime></ram:ActualDeliverySupplyChainEvent>
+      <ram:ShipToTradeParty><ram:PostalTradeAddress><ram:LineOne>${(client?.adresse || '').replace(/&/g,"&amp;")}</ram:LineOne><ram:CountryID>FR</ram:CountryID></ram:PostalTradeAddress></ram:ShipToTradeParty>
+    </ram:ApplicableHeaderTradeDelivery>
+
+    <ram:ApplicableHeaderTradeSettlement>
+      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>
+      <ram:SpecifiedTradePaymentTerms>
+        <ram:DueDateDateTime><udt:DateTimeString format="102">${echeanceXml}</udt:DateTimeString></ram:DueDateDateTime>
+      </ram:SpecifiedTradePaymentTerms>
+      <ram:ApplicableTradeTax>
+        <ram:CalculatedAmount>${tva.toFixed(2)}</ram:CalculatedAmount>
+        <ram:TypeCode>VAT</ram:TypeCode>
+        <ram:BasisAmount>${ht.toFixed(2)}</ram:BasisAmount>
+        <ram:CategoryCode>S</ram:CategoryCode>
+        <ram:RateApplicablePercent>${tv}</ram:RateApplicablePercent>
+      </ram:ApplicableTradeTax>
+      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        <ram:LineTotalAmount>${ht.toFixed(2)}</ram:LineTotalAmount>
+        <ram:TaxBasisTotalAmount>${ht.toFixed(2)}</ram:TaxBasisTotalAmount>
+        <ram:TaxTotalAmount currencyID="EUR">${tva.toFixed(2)}</ram:TaxTotalAmount>
+        <ram:GrandTotalAmount>${tot.toFixed(2)}</ram:GrandTotalAmount>
+        <ram:DuePayableAmount>${tot.toFixed(2)}</ram:DuePayableAmount>
+      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ram:ApplicableHeaderTradeSettlement>
+${lignesXml}
+  </rsm:SupplyChainTradeTransaction>
+</rsm:CrossIndustryInvoice>`;
+}
+
+function downloadFacturX(doc, client, entreprise) {
+  const xml = generateFacturXml(doc, client, entreprise);
+  const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Facture_${doc.id}_facturx.xml`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function generatePDFHtml(type, doc, client, signature, ent) {
+  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const isF = type === "facture", ti = isF ? "FACTURE" : "DEVIS";
+  const e = ent || {};
+  const lignesHtml = doc.lignes.map(l => `<tr style="border-bottom:1px solid #eee"><td style="padding:10px 8px;font-size:13px">${l.desc}</td><td style="padding:10px 8px;text-align:center;font-size:13px">${l.qte} ${l.unite}</td><td style="padding:10px 8px;text-align:right;font-size:13px">${fmt(l.pu)}</td><td style="padding:10px 8px;text-align:right;font-weight:600;font-size:13px">${fmt(l.qte * l.pu)}</td></tr>`).join("");
+  const sigHtml = signature ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center"><p style="font-size:11px;color:#666;margin-bottom:6px">Bon pour accord — Signature du client</p><img src="${signature}" style="height:70px;border-bottom:1px solid #ccc"/></div></div>` : "";
+
+  // Mentions obligatoires 2026
+  const mentionsObligatoires = isF ? `
+    <div style="margin-top:24px;padding:14px;background:#f0f7f2;border-radius:8px;font-size:10px;color:#555;line-height:1.8">
+      <strong style="font-size:11px;color:#1B4332">Mentions obligatoires</strong><br/>
+      <strong>Catégorie :</strong> Prestation de services<br/>
+      <strong>Adresse de livraison :</strong> ${client?.adresse || 'Identique à l\'adresse de facturation'}<br/>
+      <strong>N° SIREN vendeur :</strong> ${(e.siret || '').slice(0, 11)}<br/>
+      <strong>N° TVA intracommunautaire :</strong> ${e.tva_intra || 'Non applicable'}
+    </div>
+    <div style="margin-top:12px;padding:14px;background:#f8f8f5;border-radius:8px;font-size:10px;color:#888;line-height:1.7">
+      <strong>Conditions de paiement :</strong> Paiement à 30 jours. Échéance : ${dfr(doc.echeance)}<br/>
+      ${e.iban ? `<strong>IBAN :</strong> ${e.iban}<br/>` : ''}
+      En cas de retard, pénalité de 3× le taux d'intérêt légal + indemnité forfaitaire de 40€ pour frais de recouvrement (art. L.441-10 C. com.).<br/>
+      TVA ${tv}% — ${tv === 0 ? 'TVA non applicable, art. 293 B du CGI' : `Taux de TVA appliqué : ${tv}%`}
+    </div>
+    <div style="margin-top:8px;padding:8px 14px;background:#e8f5e9;border-radius:8px;font-size:9px;color:#2E7D32;display:flex;align-items:center;gap:6px">
+      ✓ Facture conforme Factur-X (norme EN 16931) — Format électronique structuré
+    </div>`
+  : `<div style="margin-top:24px;padding:14px;background:#f8f8f5;border-radius:8px;font-size:10px;color:#888;line-height:1.7">
+      <strong>Validité :</strong> ${dfr(doc.validite)}. Devis gratuit. Les travaux ne débuteront qu'après acceptation du présent devis.
+    </div>`;
+
+  const notesHtml = doc.notes ? `<div style="margin-top:16px;padding:14px;background:#fafaf7;border-radius:8px;border-left:3px solid #1B4332;font-size:11px;color:#555;line-height:1.7"><strong style="color:#1B4332">Notes :</strong> ${doc.notes}</div>` : '';
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${ti} ${doc.id}</title><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit',sans-serif;color:#1a1a18;padding:40px;max-width:800px;margin:0 auto}@media print{body{padding:20px}.no-print{display:none!important}}</style></head><body>
+<div style="display:flex;justify-content:space-between;margin-bottom:30px"><div><div style="font-size:28px;font-weight:800;color:#1B4332">⚡ FactuPro</div><div style="font-size:14px;font-weight:700;margin-top:4px">${e.nom||''}</div><div style="font-size:11px;color:#666;margin-top:2px">${e.adresse||''}</div><div style="font-size:11px;color:#666">Tél : ${e.tel||''} — ${e.email||''}</div><div style="font-size:10px;color:#999;margin-top:4px">SIRET : ${e.siret||''} — APE : ${e.ape||''} — TVA Intra : ${e.tva_intra||''}</div></div><div style="text-align:right"><div style="font-size:24px;font-weight:800;color:#1B4332;letter-spacing:2px">${ti}</div><div style="font-size:16px;font-weight:700;margin-top:4px">${doc.id}</div><div style="font-size:12px;color:#666;margin-top:4px">Date : ${dfr(doc.date)}</div>${isF ? `<div style="font-size:11px;color:#666">Échéance : ${dfr(doc.echeance)}</div>` : ''}</div></div>
+<div style="background:#f0f7f2;border-radius:10px;padding:16px;margin-bottom:24px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#666;font-weight:700;margin-bottom:6px">Client</div><div style="font-size:15px;font-weight:700">${client?.nom||''}</div><div style="font-size:12px;color:#555;margin-top:2px">${client?.adresse||''}</div><div style="font-size:12px;color:#555">${client?.tel||''} — ${client?.email||''}</div></div>
+<table style="width:100%;border-collapse:collapse;margin-bottom:16px"><thead><tr style="background:#1B4332;color:#fff"><th style="padding:10px;text-align:left;font-size:11px;text-transform:uppercase;border-radius:8px 0 0 0">Description</th><th style="padding:10px;text-align:center;font-size:11px;text-transform:uppercase">Quantité</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase">Prix unit.</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase;border-radius:0 8px 0 0">Total HT</th></tr></thead><tbody>${lignesHtml}</tbody></table>
+<div style="display:flex;justify-content:flex-end"><div style="width:260px"><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT</span><span style="font-weight:600">${fmt(ht)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#666"><span>TVA (${tv}%)</span><span>${fmt(tva)}</span></div><div style="display:flex;justify-content:space-between;padding:10px 0;font-size:20px;font-weight:800;color:#1B4332;border-top:2px solid #1B4332;margin-top:4px"><span>Total TTC</span><span>${fmt(tot)}</span></div></div></div>
+${notesHtml}${sigHtml}${mentionsObligatoires}
+<div class="no-print" style="text-align:center;margin-top:40px"><button onclick="window.print()" style="background:#1B4332;color:#fff;border:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif">📄 Imprimer / Enregistrer en PDF</button></div>
+</body></html>`;
+}
+
+
+function openPrintablePDF(type, doc, client, signature, entreprise) {
+  const html = generatePDFHtml(type, doc, client, signature, entreprise);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+}
+
+/* ══════════════ PROFIL ENTREPRISE ══════════════ */
+function ProfilPage({ entreprise, onSave, onSignOut }) {
+  const [f, setF] = useState({
+    nom: entreprise?.nom || "", siret: entreprise?.siret || "", adresse: entreprise?.adresse || "",
+    tel: entreprise?.tel || "", email: entreprise?.email || "", ape: entreprise?.ape || "", tva_intra: entreprise?.tva_intra || "", iban: entreprise?.iban || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const iS = { width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+  const lS = { fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" };
+
+  return <div>
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Mon entreprise</div>
+    <div className="fade-up" style={{ background: T.bgCard, borderRadius: T.radius, padding: 18, boxShadow: T.shadow, marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 22 }}>{(f.nom || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}</div>
+        <div><div style={{ fontSize: 18, fontWeight: 700 }}>{f.nom || "Mon Entreprise"}</div><div style={{ fontSize: 12, color: T.textMuted }}>SIRET {f.siret || "Non renseigné"}</div></div>
+      </div>
+      {[["nom","Nom de l'entreprise"],["siret","SIRET"],["adresse","Adresse complète"],["tel","Téléphone"],["email","Email"],["ape","Code APE"],["tva_intra","N° TVA Intracommunautaire"],["iban","IBAN (affiché sur vos factures)"]].map(([k, l]) => (
+        <div key={k} style={{ marginBottom: 12 }}><label style={lS}>{l}</label><input className="search-glow" style={iS} value={f[k]} onChange={e => { setF({ ...f, [k]: e.target.value }); setSaved(false); }} placeholder={l} /></div>
+      ))}
+      <button className="btn-press" disabled={saving} onClick={async () => { setSaving(true); try { await onSave(f); setSaved(true); } catch(e) { console.error(e); } setSaving(false); }}
+        style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>
+        {saving ? "Enregistrement..." : saved ? "✓ Enregistré" : "Enregistrer"}
+      </button>
+    </div>
+    <div className="fade-up fade-up-2" style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 8 }}>Ces informations apparaissent sur</div>
+      <div style={{ fontSize: 13, color: T.text, lineHeight: 1.8 }}>📄 Vos devis PDF<br/>🧾 Vos factures PDF</div>
+    </div>
+    <button className="btn-press" onClick={onSignOut} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "1.5px solid #FECACA", background: T.dangerPale, color: "#991B1B", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Déconnexion</button>
+  </div>;
+}
+
+function CataloguePage({ catalogue, onAdd, onUpdate, onDelete }) {
+  const [edit, setEdit] = useState(null); // null | 'new' | item
+  const [f, setF] = useState({ categorie: "", description: "", unite: "forfait", prix_unitaire: 0, actif: true });
+  const [saving, setSaving] = useState(false);
+  const iS = { width: "100%", padding: "8px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 13, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+  const cats = [...new Set(catalogue.map(x => x.categorie))];
+
+  function openNew() { setF({ categorie: "", description: "", unite: "forfait", prix_unitaire: 0, actif: true }); setEdit("new"); }
+  function openEdit(item) { setF({ categorie: item.categorie, description: item.description, unite: item.unite, prix_unitaire: item.prix_unitaire, actif: item.actif }); setEdit(item); }
+
+  if (edit) return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button className="btn-press" onClick={() => setEdit(null)} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
+      <h2 style={{ fontSize: 18, fontWeight: 700 }}>{edit === "new" ? "Nouvel article" : "Modifier"}</h2>
+    </div>
+    {[["categorie","Catégorie"],["description","Description"]].map(([k,l]) => <div key={k} style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>{l}</label><input className="search-glow" style={iS} value={f[k]} onChange={e => setF({ ...f, [k]: e.target.value })} /></div>)}
+    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ flex: 1 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Unité</label><select className="search-glow" style={iS} value={f.unite} onChange={e => setF({ ...f, unite: e.target.value })}>{["forfait","m²","ml","unité","heure","jour"].map(u => <option key={u}>{u}</option>)}</select></div>
+      <div style={{ flex: 1 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Prix (€ HT)</label><input className="search-glow" style={iS} type="number" value={f.prix_unitaire} onChange={e => setF({ ...f, prix_unitaire: parseFloat(e.target.value) || 0 })} /></div>
+    </div>
+    <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+      <input type="checkbox" id="actif" checked={f.actif} onChange={e => setF({ ...f, actif: e.target.checked })} />
+      <label htmlFor="actif" style={{ fontSize: 13, color: T.textMuted }}>Article actif (visible dans le catalogue)</label>
+    </div>
+    <button className="btn-press" disabled={saving} onClick={async () => {
+      if (!f.description.trim() || !f.categorie.trim()) return;
+      setSaving(true);
+      if (edit === "new") await onAdd({ categorie: f.categorie, description: f.description, unite: f.unite, prix_unitaire: f.prix_unitaire, actif: f.actif });
+      else await onUpdate(edit.id, { categorie: f.categorie, description: f.description, unite: f.unite, prix_unitaire: f.prix_unitaire, actif: f.actif });
+      setSaving(false); setEdit(null);
+    }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>
+      {saving ? "Enregistrement..." : "Enregistrer"}
+    </button>
+  </div>;
+
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Catalogue ({catalogue.length})</div>
+      <button className="btn-press" onClick={openNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Ajouter</button>
+    </div>
+    {cats.map(cat => <div key={cat} style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.primary, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6, paddingLeft: 2 }}>{cat}</div>
+      {catalogue.filter(x => x.categorie === cat).map(item => <div key={item.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "12px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", alignItems: "center", gap: 10, opacity: item.actif ? 1 : 0.5 }}>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{item.description}</div><div style={{ fontSize: 11, color: T.textMuted }}>{item.unite} · {!item.actif && <span style={{ color: T.danger }}>Inactif · </span>}</div></div>
+        <div style={{ fontWeight: 700, fontSize: 13, color: T.primary }}>{fmt(parseFloat(item.prix_unitaire))}</div>
+        <button className="btn-press" onClick={() => openEdit(item)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✏</button>
+        <button className="btn-press" onClick={() => onDelete(item.id)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: "none", background: T.dangerPale, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>🗑</button>
+      </div>)}
+    </div>)}
+    {catalogue.length === 0 && <div style={{ textAlign: "center", padding: 30, color: T.textMuted }}><div style={{ fontSize: 36, marginBottom: 8 }}>📋</div><div style={{ fontWeight: 600 }}>Catalogue vide</div><div style={{ fontSize: 13, marginTop: 4 }}>Ajoutez vos prestations habituelles</div></div>}
+  </div>;
+}
+
+function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
+  const [cId, setCId] = useState(clients[0]?.id || "");
+  const [ls, setLs] = useState([{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
+  const [tv, setTv] = useState(20);
+  const [notes, setNotes] = useState("");
+  const [echeance, setEcheance] = useState(in30());
+  const [showC, setShowC] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const uL = (i, k, v) => { const n = [...ls]; n[i] = { ...n[i], [k]: k === "qte" || k === "pu" ? parseFloat(v) || 0 : v }; setLs(n); };
+  const inputStyle = { width: "100%", padding: "8px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, fontWeight: 600, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
+      <h2 style={{ fontSize: 18, fontWeight: 700 }}>Nouvelle facture</h2>
+    </div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Date d'échéance</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} type="date" value={echeance} onChange={e => setEcheance(e.target.value)} /></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase" }}>Prestations</label>
+      <button className="btn-press" onClick={() => setShowC(true)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Catalogue</button>
+    </div>
+    {ls.map((l, i) => <div key={i} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 12, marginBottom: 8, boxShadow: T.shadow }}>
+      <input className="search-glow" style={{ ...inputStyle, marginBottom: 6 }} placeholder="Description" value={l.desc} onChange={e => uL(i, "desc", e.target.value)} />
+      <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ width: 55 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Qté</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} type="number" value={l.qte} onChange={e => uL(i, "qte", e.target.value)} /></div>
+        <div style={{ flex: 1 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Unité</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} value={l.unite} onChange={e => uL(i, "unite", e.target.value)}>{["forfait","m²","ml","unité","heure","jour"].map(u => <option key={u}>{u}</option>)}</select></div>
+        <div style={{ width: 75 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>P.U.</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400, padding: "6px 8px", fontSize: 13 }} type="number" value={l.pu} onChange={e => uL(i, "pu", e.target.value)} /></div>
+        <button onClick={() => ls.length > 1 && setLs(ls.filter((_, j) => j !== i))} style={{ alignSelf: "flex-end", background: "none", border: "none", color: T.danger, cursor: "pointer", padding: 6, fontSize: 14 }}>×</button>
+      </div>
+    </div>)}
+    <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 14 }}>+ Ajouter une ligne</button>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(tl(ls) * (1 + tv / 100))}</span></div>
+    </div>
+    <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions de paiement, IBAN..." /></div>
+    <button className="btn-press" disabled={saving} onClick={async () => {
+      const vl = ls.filter(l => l.desc.trim()); if (!vl.length || !cId) return;
+      setSaving(true); await onSave({ clientId: cId, tva: tv, echeance, lignes: vl, notes }); setSaving(false);
+    }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer la facture"}</button>
+    {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
+  </div>;
+}
+
+/* ══════════════ APP (connected to Supabase) ══════════════ */
+const NAV_ITEMS = [
+  { id: "dashboard", label: "Accueil", icon: "⌂" },
+  { id: "clients", label: "Clients", icon: "👥" },
+  { id: "devis", label: "Devis", icon: "📄" },
+  { id: "factures", label: "Factures", icon: "🧾" },
+  { id: "catalogue", label: "Catalogue", icon: "📋" },
+  { id: "profil", label: "Profil", icon: "⚙️" },
+];
+
+export default function FactuPro() {
+  const { entreprise, signOut, updateEntreprise } = useAuth();
+  const { clients: rawClients, addClient, updateClient } = useClients(entreprise?.id);
+  const { devis: rawDevis, addDevis, updateDevis, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
+  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
+  const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
+
+  // Normalize data for UI
+  const cls = rawClients.map(normClient);
+  const dvs = rawDevis.map(normDevis);
+  const fcs = rawFactures.map(normFacture);
+  const cat = rawCat.map(normCat);
+
+  const [pg, setPg] = useState("dashboard");
+  const [selD, setSelD] = useState(null);
+  const [selC, setSelC] = useState(null);
+  const [profC, setProfC] = useState(null);
+  const [editC, setEditC] = useState(false);
+  const [showSig, setShowSig] = useState(false);
+  const [pdf, setPdf] = useState(null);
+  const [conf, setConf] = useState(null);
+  const [dup, setDup] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [payPick, setPayPick] = useState(null);
+
+  const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
+  const nav = p => { setPg(p); setSelD(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
+  const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
+  const retC = fcs.filter(f => f.statut === "en_retard").length;
+
+  // Keep selD in sync with dvs after reload
+  useEffect(() => {
+    if (selD) {
+      const updated = dvs.find(d => d.dbId === selD.dbId);
+      if (updated) setSelD(updated);
+    }
+  }, [dvs]);
+
+  return (
+    <div style={{ fontFamily: T.font, background: T.bg, color: T.text, minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto", position: "relative" }}>
+      <style>{CSS}</style>
+      <Toast m={toast} />
+      {conf && <Confirm msg={conf.m} onOk={() => { conf.fn(); setConf(null); }} onNo={() => setConf(null)} />}
+      {pdf && <PDFPrev {...pdf} onClose={() => setPdf(null)} />}
+      {showSig && <SigPad onNo={() => setShowSig(false)} onSave={async sig => {
+        await signerDevis(selD.dbId, sig);
+        setShowSig(false); fl("Devis signé ✓");
+      }} />}
+      {payPick && <PayPicker onClose={() => setPayPick(null)} onSel={async mode => {
+        await marquerPayee(payPick, mode);
+        setPayPick(null); fl("Paiement enregistré ✓");
+      }} />}
+
+      {/* Header */}
+      <div className="gradient-header" style={{ color: "#fff", padding: "18px 20px 16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation</div>
+          </div>
+          <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
+            <div style={{ fontSize: 10, opacity: 0.6 }}>{entreprise?.siret || "Configurer →"}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, padding: "14px 14px 90px", overflowY: "auto" }}>
+        {pg === "dashboard" && <Dashboard devis={dvs} factures={fcs} clients={cls} onNav={nav} />}
+
+        {pg === "clients" && !editC && !selC && !profC && <ClientsList clients={cls} onSelect={c => setProfC(c)} onAdd={() => setEditC("new")} />}
+        {pg === "clients" && profC && !editC && !selC && <ClientProfil client={profC} devis={dvs} factures={fcs} onBack={() => setProfC(null)} onEdit={() => { setSelC(profC); setProfC(null); }} />}
+        {pg === "clients" && (editC || selC) && <ClientForm client={selC} onNo={() => { setSelC(null); setEditC(false); }}
+          onSave={async c => {
+            try {
+              if (c.id) { await updateClient(c.id, { nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes }); setProfC(null); }
+              else { await addClient({ nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes }); }
+              setSelC(null); setEditC(false); fl("Client enregistré ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }} />}
+
+        {pg === "devis" && !selD && <DevisList devis={dvs} clients={cls} onSelect={d => setSelD(d)} onNew={() => nav("nouveau_devis")} />}
+        {pg === "devis" && selD && <DevisDetail devis={selD} client={cls.find(c => c.id === selD.clientId)}
+          onBack={() => setSelD(null)}
+          onSign={() => setShowSig(true)}
+          onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
+          onEmail={() => sendDocByEmail("devis", selD, cls.find(c => c.id === selD.clientId), selD.signature, entreprise)}
+          onDup={() => { setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
+          onConvert={async () => {
+            try {
+              const raw = selD._raw;
+              await creerDepuisDevis(raw);
+              await reloadDevis();
+              setSelD(null); setPg("factures"); fl("Facture créée ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+          onDelete={() => setConf({ m: `Supprimer ${selD.id} ?`, fn: async () => {
+            await deleteDevis(selD.dbId); setSelD(null); fl("Supprimé");
+          } })}
+        />}
+
+        {pg === "nouveau_devis" && <DevisForm clients={cls} catalogue={cat} init={dup}
+          onNo={() => { setDup(null); nav("devis"); }}
+          onSave={async d => {
+            try {
+              await addDevis(
+                { client_id: d.clientId, date_devis: tod(), date_validite: in30(), taux_tva: d.tva, notes: d.notes },
+                d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
+              );
+              setDup(null); nav("devis"); fl("Devis créé ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+        />}
+
+        {pg === "nouvelle_facture" && <FactureDirecteForm clients={cls} catalogue={cat}
+          onNo={() => nav("factures")}
+          onSave={async d => {
+            try {
+              await addFactureDirecte(
+                { client_id: d.clientId, date_echeance: d.echeance, taux_tva: d.tva, notes: d.notes },
+                d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
+              );
+              nav("factures"); fl("Facture créée ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+        />}
+
+        {pg === "factures" && <FacturesList factures={fcs} clients={cls}
+          onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
+          onEmail={f => sendDocByEmail("facture", f, cls.find(c => c.id === f.clientId), null, entreprise)}
+          onPay={id => setPayPick(id)}
+          onNew={() => nav("nouvelle_facture")}
+        />}
+
+        {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
+
+        {pg === "relances" && <Relances factures={fcs} clients={cls}
+          onRelance={async id => { await envoyerRelance(id); fl("Relance envoyée ✓"); }}
+          onPaid={id => setPayPick(id)}
+        />}
+
+        {pg === "analytics" && <Analytics factures={fcs} devis={dvs} clients={cls}
+          onExportFactures={() => { exportCSV(fcs, cls); fl("Export factures téléchargé ✓"); }}
+          onExportDevis={() => { exportDevisCSV(dvs, cls); fl("Export devis téléchargé ✓"); }}
+        />}
+
+        {pg === "profil" && <ProfilPage entreprise={entreprise} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+      </div>
+
+      {/* Nav */}
+      <div style={{ display: "flex", background: T.bgCard, borderTop: `1px solid ${T.borderLight}`, padding: "2px 0 env(safe-area-inset-bottom, 6px)", position: "sticky", bottom: 0, zIndex: 10, boxShadow: "0 -4px 20px rgba(0,0,0,0.04)" }}>
+        {NAV_ITEMS.map(item => (
+          <button key={item.id} className="btn-press" onClick={() => nav(item.id)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "8px 0 6px", fontSize: 9, fontWeight: tab === item.id ? 700 : 500, color: tab === item.id ? T.primary : T.textLight, background: "none", border: "none", cursor: "pointer", fontFamily: T.font, letterSpacing: 0.3, textTransform: "uppercase", position: "relative" }}>
+            {tab === item.id && <div style={{ position: "absolute", top: 0, left: "25%", right: "25%", height: 3, borderRadius: "0 0 3px 3px", background: T.primary }} />}
+            <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
+            {item.id === "relances" && retC > 0 && <span style={{ position: "absolute", top: 2, right: "calc(50% - 16px)", background: T.danger, color: "#fff", fontSize: 8, fontWeight: 800, borderRadius: 10, width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>{retC}</span>}
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
