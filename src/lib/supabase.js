@@ -7,4 +7,8 @@ if (!supabaseUrl || !supabaseKey) {
   console.error('⚠️ Variables Supabase manquantes. Copiez .env.example vers .env et renseignez vos clés.')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey)
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: false,
+  }
+})
