@@ -33,6 +33,99 @@ const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
+async function sendEmailViaResend(to, subject, html) {
+  const { supabase } = await import('../lib/supabase');
+  const { data, error } = await supabase.functions.invoke('send-email', {
+    body: { to, subject, html },
+  });
+  if (error) throw error;
+  return data;
+}
+
+function buildEmailHtml(type, doc, client, entreprise) {
+  const isF = type === "facture";
+  const ti = isF ? "Facture" : "Devis";
+  const ht = tl(doc.lignes);
+  const tv = doc.tva || 10;
+  const tva = ht * tv / 100;
+  const tot = ht + tva;
+  const e = entreprise || {};
+  const ibanBlock = e.iban ? `<tr><td style="padding:6px 0;color:#666;font-size:13px">IBAN</td><td style="padding:6px 0;font-weight:600;font-size:13px">${e.iban}</td></tr>` : "";
+
+  const lignesRows = doc.lignes.map(l => `
+    <tr style="border-bottom:1px solid #eee">
+      <td style="padding:10px 8px;font-size:13px">${l.desc}</td>
+      <td style="padding:10px 8px;text-align:center;font-size:13px">${l.qte} ${l.unite}</td>
+      <td style="padding:10px 8px;text-align:right;font-size:13px">${fmt(l.pu)}</td>
+      <td style="padding:10px 8px;text-align:right;font-weight:600;font-size:13px">${fmt(l.qte * l.pu)}</td>
+    </tr>`).join("");
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f0;font-family:'Helvetica Neue',Arial,sans-serif">
+<div style="max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#1B4332,#40916C);padding:28px 32px;color:#fff">
+    <div style="font-size:24px;font-weight:800;letter-spacing:-0.5px">⚡ FactuPro</div>
+    <div style="font-size:13px;opacity:0.75;margin-top:2px">${e.nom || ""}</div>
+  </div>
+
+  <!-- Body -->
+  <div style="padding:28px 32px">
+    <h2 style="font-size:20px;font-weight:700;color:#1a1a18;margin:0 0 6px">${ti} ${doc.id}</h2>
+    <p style="font-size:14px;color:#666;margin:0 0 24px">Bonjour ${client?.nom || ""},<br>Veuillez trouver ci-dessous votre ${ti.toLowerCase()}.</p>
+
+    <!-- Client -->
+    <div style="background:#f0f7f2;border-radius:10px;padding:14px 16px;margin-bottom:20px">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:#666;font-weight:700;margin-bottom:4px">Client</div>
+      <div style="font-size:14px;font-weight:700">${client?.nom || ""}</div>
+      ${client?.adresse ? `<div style="font-size:12px;color:#555;margin-top:2px">${client.adresse}</div>` : ""}
+    </div>
+
+    <!-- Lignes -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+      <thead><tr style="background:#1B4332;color:#fff">
+        <th style="padding:10px 8px;text-align:left;font-size:11px;text-transform:uppercase">Description</th>
+        <th style="padding:10px 8px;text-align:center;font-size:11px;text-transform:uppercase">Qté</th>
+        <th style="padding:10px 8px;text-align:right;font-size:11px;text-transform:uppercase">P.U.</th>
+        <th style="padding:10px 8px;text-align:right;font-size:11px;text-transform:uppercase">Total HT</th>
+      </tr></thead>
+      <tbody>${lignesRows}</tbody>
+    </table>
+
+    <!-- Totaux -->
+    <div style="display:flex;justify-content:flex-end;margin-bottom:20px">
+      <table style="width:220px">
+        <tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(ht)}</td></tr>
+        <tr><td style="padding:4px 0;font-size:13px;color:#666">TVA (${tv}%)</td><td style="padding:4px 0;font-size:13px;text-align:right;color:#666">${fmt(tva)}</td></tr>
+        <tr style="border-top:2px solid #1B4332"><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332">Total TTC</td><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332;text-align:right">${fmt(tot)}</td></tr>
+      </table>
+    </div>
+
+    <!-- Infos paiement -->
+    ${isF ? `<div style="background:#f8f8f5;border-radius:10px;padding:14px 16px;font-size:13px;color:#555;line-height:1.7">
+      <table style="width:100%">
+        <tr><td style="padding:6px 0;color:#666;font-size:13px">Échéance</td><td style="padding:6px 0;font-weight:600;font-size:13px">${dfr(doc.echeance)}</td></tr>
+        ${ibanBlock}
+      </table>
+      <div style="margin-top:8px;font-size:12px;color:#888">En cas de retard, pénalité de 3× le taux légal + 40€ forfaitaires.</div>
+    </div>` : `<div style="background:#f8f8f5;border-radius:10px;padding:14px 16px;font-size:13px;color:#555">
+      Devis valable jusqu'au <strong>${dfr(doc.validite)}</strong>. Les travaux ne débuteront qu'après acceptation.
+    </div>`}
+  </div>
+
+  <!-- Footer -->
+  <div style="padding:20px 32px;background:#f9f9f7;border-top:1px solid #eee;font-size:12px;color:#999;text-align:center">
+    ${e.nom || ""} · ${e.adresse || ""}<br>
+    Tél : ${e.tel || ""} · ${e.email || ""}<br>
+    SIRET : ${e.siret || ""}
+    <div style="margin-top:8px;font-size:11px">Envoyé via ⚡ FactuPro</div>
+  </div>
+</div>
+</body></html>`;
+}
+
 function buildEmailContent(type, doc, client, entreprise) {
   const isF = type === "facture";
   const ti = isF ? "Facture" : "Devis";
@@ -64,50 +157,57 @@ SIRET : ${e.siret || ""}`;
   return { subject, body, to: client?.email || "" };
 }
 
-function EmailModal({ type, doc, client, signature, entreprise, onClose }) {
-  const { subject, body, to } = buildEmailContent(type, doc, client, entreprise);
-  const [copied, setCopied] = useState(false);
-  const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent }) {
+  const { subject, to } = buildEmailContent(type, doc, client, entreprise);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
 
-  function copyText() {
-    navigator.clipboard.writeText(`À : ${to}\nObjet : ${subject}\n\n${body}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function handleSend() {
+    if (!to) { setError("Aucun email renseigné pour ce client."); return; }
+    setSending(true); setError("");
+    try {
+      const html = buildEmailHtml(type, doc, client, entreprise);
+      await sendEmailViaResend(to, subject, html);
+      setSent(true);
+      setTimeout(() => { onClose(); onSent?.(); }, 1500);
+    } catch (e) {
+      setError("Erreur d'envoi : " + (e.message || "réessayez"));
+    }
+    setSending(false);
   }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
-      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, maxHeight: "85vh", display: "flex", flexDirection: "column", animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ fontSize: 17, fontWeight: 700 }}>✉ Envoyer par email</h3>
           <button onClick={onClose} style={{ background: T.bgElevated, border: "none", cursor: "pointer", color: T.textMuted, width: 32, height: 32, borderRadius: "50%", fontSize: 16 }}>×</button>
         </div>
 
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>À</div>
-          <div style={{ fontSize: 14, fontWeight: 600, background: T.bgElevated, padding: "8px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}` }}>{to || "—"}</div>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Objet</div>
-          <div style={{ fontSize: 13, background: T.bgElevated, padding: "8px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}` }}>{subject}</div>
-        </div>
-        <div style={{ marginBottom: 16, flex: 1, minHeight: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Message</div>
-          <div style={{ fontSize: 12, background: T.bgElevated, padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, overflowY: "auto", maxHeight: 200, whiteSpace: "pre-wrap", lineHeight: 1.6, color: T.text }}>{body}</div>
+        <div style={{ background: T.bgElevated, borderRadius: T.radiusSm, padding: "14px 16px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 12, color: T.textMuted, fontWeight: 600 }}>À</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: to ? T.text : T.danger }}>{to || "⚠ Email client manquant"}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 12, color: T.textMuted, fontWeight: 600 }}>Objet</span>
+            <span style={{ fontSize: 13, color: T.text }}>{subject}</span>
+          </div>
         </div>
 
-        <div style={{ background: T.accentPale, border: `1px solid ${T.accent}`, borderRadius: T.radiusXs, padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#92400E" }}>
-          💡 Téléchargez le PDF depuis l'aperçu, puis joignez-le à votre email.
+        <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#065F46" }}>
+          📄 L'email inclut tous les détails ({type === "facture" ? "lignes, totaux, échéance, IBAN" : "lignes, totaux, validité"}) dans un format professionnel HTML.
         </div>
 
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn-press" onClick={copyText} style={{ flex: 1, padding: "11px 0", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: copied ? T.primaryLighter : T.text }}>
-            {copied ? "✓ Copié !" : "📋 Copier le texte"}
-          </button>
-          <a href={mailto} style={{ flex: 1, padding: "11px 0", borderRadius: T.radiusXs, border: "none", background: T.primary, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#fff", textAlign: "center", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            ✉ Ouvrir ma messagerie
-          </a>
-        </div>
+        {error && <div style={{ background: T.dangerPale, border: `1px solid #FECACA`, borderRadius: T.radiusXs, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#991B1B" }}>⚠ {error}</div>}
+
+        {sent
+          ? <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: 16, textAlign: "center", fontSize: 15, fontWeight: 700, color: T.primary }}>✓ Email envoyé !</div>
+          : <button className="btn-press" onClick={handleSend} disabled={sending || !to} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: sending ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: sending ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>
+              {sending ? "Envoi en cours..." : `✉ Envoyer à ${to || "..."}`}
+            </button>
+        }
       </div>
     </div>
   );
