@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
 import { useClients, useDevis, useFactures, useCatalogue } from '../lib/data';
 
@@ -926,11 +926,11 @@ export default function FactuPro() {
   const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
 
-  // Normalize data for UI
-  const cls = rawClients.map(normClient);
-  const dvs = rawDevis.map(normDevis);
-  const fcs = rawFactures.map(normFacture);
-  const cat = rawCat.map(normCat);
+  // Normalize data for UI — useMemo évite de recréer les tableaux à chaque render
+  const cls = useMemo(() => rawClients.map(normClient), [rawClients]);
+  const dvs = useMemo(() => rawDevis.map(normDevis), [rawDevis]);
+  const fcs = useMemo(() => rawFactures.map(normFacture), [rawFactures]);
+  const cat = useMemo(() => rawCat.map(normCat), [rawCat]);
 
   const [pg, setPg] = useState("dashboard");
   const [selD, setSelD] = useState(null);
@@ -950,12 +950,11 @@ export default function FactuPro() {
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
-  // Keep selD in sync with dvs after reload
+  // Sync selD quand les données rechargent (ex: après signature)
   useEffect(() => {
-    if (selD) {
-      const updated = dvs.find(d => d.dbId === selD.dbId);
-      if (updated) setSelD(updated);
-    }
+    if (!selD) return;
+    const updated = dvs.find(d => d.dbId === selD.dbId);
+    if (updated && updated.statut !== selD.statut) setSelD(updated);
   }, [dvs]);
 
   return (
