@@ -33,10 +33,10 @@ const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
-async function sendEmailViaResend(to, subject, html) {
+async function sendEmailViaResend(to, subject, html, replyTo) {
   const { supabase } = await import('../lib/supabase');
   const { data, error } = await supabase.functions.invoke('send-email', {
-    body: { to, subject, html },
+    body: { to, subject, html, replyTo },
   });
   // Le SDK Supabase lève une erreur générique sur non-2xx — on remonte le vrai message Resend
   if (error) {
@@ -175,7 +175,8 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
     setSending(true); setError("");
     try {
       const html = buildEmailHtml(type, doc, client, entreprise);
-      await sendEmailViaResend(to, subject, html);
+      const replyTo = entreprise?.email || undefined;
+      await sendEmailViaResend(to, subject, html, replyTo);
       setSent(true);
       setTimeout(() => { onClose(); onSent?.(); }, 1500);
     } catch (e) {

@@ -1,13 +1,30 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-// Sans domaine vérifié sur Resend, utilise onboarding@resend.dev
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <onboarding@resend.dev>";
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("Resend email");
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <noreply@synapserh.fr>";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Génère une version texte brut à partir du HTML (évite le spam)
+function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/td>/gi, " | ")
+    .replace(/<\/th>/gi, " | ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&euro;/g, "€")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -21,7 +38,7 @@ serve(async (req) => {
       });
     }
 
-    const { to, subject, html } = await req.json();
+    const { to, subject, html, replyTo } = await req.json();
 
     if (!to || !subject || !html) {
       return new Response(JSON.stringify({ error: "Paramètres manquants : to, subject, html requis" }), {
@@ -29,21 +46,36 @@ serve(async (req) => {
       });
     }
 
+    const text = htmlToText(html);
+
+    const payload: Record<string, unknown> = {
+      from: FROM_EMAIL,
+      to,
+      subject,
+      html,
+      text, // version texte brut = meilleure délivrabilité
+      headers: {
+        "X-Entity-Ref-ID": crypto.randomUUID(), // évite la déduplication Gmail
+      },
+    };
+
+    // Reply-To = email de l'artisan si fourni
+    if (replyTo) payload.reply_to = replyTo;
+
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from: FROM_EMAIL, to, subject, html }),
+      body: JSON.stringify(payload),
     });
 
     const data = await res.json();
 
     if (!res.ok) {
-      // Renvoie l'erreur Resend en clair pour faciliter le debug
       return new Response(JSON.stringify({ error: data?.message || data?.name || JSON.stringify(data) }), {
-        status: 200, // 200 pour que le client Supabase ne masque pas le message
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
