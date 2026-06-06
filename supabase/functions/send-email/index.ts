@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <noreply@factupro.fr>";
+// Sans domaine vérifié sur Resend, utilise onboarding@resend.dev
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <onboarding@resend.dev>";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,10 +15,16 @@ serve(async (req) => {
   }
 
   try {
+    if (!RESEND_API_KEY) {
+      return new Response(JSON.stringify({ error: "RESEND_API_KEY manquant dans les secrets Supabase" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { to, subject, html } = await req.json();
 
     if (!to || !subject || !html) {
-      return new Response(JSON.stringify({ error: "Paramètres manquants" }), {
+      return new Response(JSON.stringify({ error: "Paramètres manquants : to, subject, html requis" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -34,18 +41,22 @@ serve(async (req) => {
     const data = await res.json();
 
     if (!res.ok) {
-      return new Response(JSON.stringify({ error: data }), {
-        status: res.status, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // Renvoie l'erreur Resend en clair pour faciliter le debug
+      return new Response(JSON.stringify({ error: data?.message || data?.name || JSON.stringify(data) }), {
+        status: 200, // 200 pour que le client Supabase ne masque pas le message
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     return new Response(JSON.stringify({ success: true, id: data.id }), {
+      status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });

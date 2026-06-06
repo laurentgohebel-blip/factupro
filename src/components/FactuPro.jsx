@@ -38,7 +38,14 @@ async function sendEmailViaResend(to, subject, html) {
   const { data, error } = await supabase.functions.invoke('send-email', {
     body: { to, subject, html },
   });
-  if (error) throw error;
+  // Le SDK Supabase lève une erreur générique sur non-2xx — on remonte le vrai message Resend
+  if (error) {
+    // Essaie de récupérer le corps de l'erreur (contenu JSON de la Edge Function)
+    const msg = error?.context?.json?.error || error?.message || 'Erreur inconnue';
+    throw new Error(msg);
+  }
+  // La Edge Function renvoie { error } avec status 200 pour exposer le message Resend
+  if (data?.error) throw new Error(data.error);
   return data;
 }
 
