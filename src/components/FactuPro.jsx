@@ -49,7 +49,17 @@ async function sendEmailViaResend(to, subject, html, replyTo) {
   return data;
 }
 
-function buildEmailHtml(type, doc, client, entreprise) {
+function defaultMessage(type, doc, client, entreprise) {
+  const isF = type === "facture";
+  const isR = type === "relance";
+  const e = entreprise || {};
+  const nom = client?.nom || "";
+  if (isR) return `Bonjour ${nom},\n\nSauf erreur de notre part, la facture ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC reste impayée à ce jour.\n\nNous vous remercions de bien vouloir régulariser cette situation dans les meilleurs délais.\n\nN'hésitez pas à nous contacter si vous avez des questions.\n\nCordialement,\n${e.nom || ""}`;
+  if (isF) return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre facture ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC.\n\nMerci de procéder au règlement avant le ${dfr(doc.echeance)}.\n\nCordialement,\n${e.nom || ""}`;
+  return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre devis ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC.\n\nCe devis est valable jusqu'au ${dfr(doc.validite)}. N'hésitez pas à nous contacter pour toute question.\n\nCordialement,\n${e.nom || ""}`;
+}
+
+function buildEmailHtml(type, doc, client, entreprise, customMessage) {
   const isF = type === "facture";
   const ti = isF ? "Facture" : "Devis";
   const ht = tl(doc.lignes);
@@ -80,8 +90,8 @@ function buildEmailHtml(type, doc, client, entreprise) {
 
   <!-- Body -->
   <div style="padding:28px 32px">
-    <h2 style="font-size:20px;font-weight:700;color:#1a1a18;margin:0 0 6px">${ti} ${doc.id}</h2>
-    <p style="font-size:14px;color:#666;margin:0 0 24px">Bonjour ${client?.nom || ""},<br>Veuillez trouver ci-dessous votre ${ti.toLowerCase()}.</p>
+    <h2 style="font-size:20px;font-weight:700;color:#1a1a18;margin:0 0 16px">${ti} ${doc.id}</h2>
+    ${customMessage ? `<div style="font-size:14px;color:#333;line-height:1.7;margin-bottom:24px;white-space:pre-line">${customMessage.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>` : `<p style="font-size:14px;color:#666;margin:0 0 24px">Bonjour ${client?.nom || ""},<br>Veuillez trouver ci-dessous votre ${ti.toLowerCase()}.</p>`}
 
     <!-- Client -->
     <div style="background:#f0f7f2;border-radius:10px;padding:14px 16px;margin-bottom:20px">
@@ -169,12 +179,13 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState(() => defaultMessage(type, doc, client, entreprise));
 
   async function handleSend() {
     if (!to) { setError("Aucun email renseigné pour ce client."); return; }
     setSending(true); setError("");
     try {
-      const html = buildEmailHtml(type, doc, client, entreprise);
+      const html = buildEmailHtml(type, doc, client, entreprise, message);
       const replyTo = entreprise?.email || undefined;
       await sendEmailViaResend(to, subject, html, replyTo);
       setSent(true);
@@ -187,13 +198,13 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
-      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto", animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <h3 style={{ fontSize: 17, fontWeight: 700 }}>✉ Envoyer par email</h3>
           <button onClick={onClose} style={{ background: T.bgElevated, border: "none", cursor: "pointer", color: T.textMuted, width: 32, height: 32, borderRadius: "50%", fontSize: 16 }}>×</button>
         </div>
 
-        <div style={{ background: T.bgElevated, borderRadius: T.radiusSm, padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ background: T.bgElevated, borderRadius: T.radiusSm, padding: "12px 16px", marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontSize: 12, color: T.textMuted, fontWeight: 600 }}>À</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: to ? T.text : T.danger }}>{to || "⚠ Email client manquant"}</span>
@@ -204,8 +215,19 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
           </div>
         </div>
 
-        <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#065F46" }}>
-          📄 L'email inclut tous les détails ({type === "facture" ? "lignes, totaux, échéance, IBAN" : "lignes, totaux, validité"}) dans un format professionnel HTML.
+        {/* Message personnalisé */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: T.textMuted, display: "block", marginBottom: 6 }}>MESSAGE D'ACCOMPAGNEMENT</label>
+          <textarea
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            rows={7}
+            style={{ width: "100%", padding: "12px 14px", borderRadius: T.radiusSm, border: `1.5px solid ${T.border}`, background: T.bgElevated, color: T.text, fontSize: 13, lineHeight: 1.6, fontFamily: T.font, resize: "vertical", boxSizing: "border-box", outline: "none" }}
+          />
+        </div>
+
+        <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#065F46" }}>
+          📄 Le détail ({type === "facture" ? "lignes, totaux, échéance, IBAN" : "lignes, totaux, validité"}) est ajouté automatiquement sous votre message.
         </div>
 
         {error && <div style={{ background: T.dangerPale, border: `1px solid #FECACA`, borderRadius: T.radiusXs, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#991B1B" }}>⚠ {error}</div>}
