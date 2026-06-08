@@ -557,7 +557,7 @@ function PayPicker({ onSel, onClose }) {
 }
 
 /* ══════════════ PAGES ══════════════ */
-function Dashboard({ devis, factures, clients, onNav }) {
+function Dashboard({ devis, factures, clients, onNav, onSelectDevis, onSelectFacture }) {
   const ca = factures.filter(f => f.statut === "payee").reduce((s, f) => s + ttc(f), 0);
   const att = factures.filter(f => f.statut !== "payee").reduce((s, f) => s + ttc(f), 0);
   const dc = devis.filter(d => d.statut === "en_attente").length;
@@ -599,7 +599,7 @@ function Dashboard({ devis, factures, clients, onNav }) {
     </div>
     {recent.length > 0 && <div className="fade-up fade-up-5" style={{ marginTop: 20 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 10 }}>Activité récente</div>
-      {recent.map(item => { const cl = clients.find(c => c.id === item.clientId); return <div key={item.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "12px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
+      {recent.map(item => { const cl = clients.find(c => c.id === item.clientId); return <div key={item.id} className="card-hover" onClick={() => item._t === "devis" ? onSelectDevis(item) : onSelectFacture(item)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: "12px 14px", marginBottom: 6, boxShadow: T.shadow, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
         <div style={{ width: 36, height: 36, borderRadius: 10, background: item._t === "devis" ? T.infoPale : T.primaryPale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>{item._t === "devis" ? "📄" : "🧾"}</div>
         <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{item.id} — {cl?.nom}</div><div style={{ fontSize: 11, color: T.textMuted }}>{dfr(item.date)}</div></div>
         <div style={{ textAlign: "right" }}><div style={{ fontSize: 13, fontWeight: 700, color: T.primary }}>{fmtShort(ttc(item))}</div><Badge statut={item.statut} /></div>
@@ -1233,7 +1233,10 @@ export default function FactuPro() {
 
       {/* Content */}
       <div style={{ flex: 1, padding: "14px 14px 90px", overflowY: "auto" }}>
-        {pg === "dashboard" && <Dashboard devis={dvs} factures={fcs} clients={cls} onNav={nav} />}
+        {pg === "dashboard" && <Dashboard devis={dvs} factures={fcs} clients={cls} onNav={nav}
+          onSelectDevis={d => { setSelD(d); setPg("devis"); }}
+          onSelectFacture={f => { setSelF(f); setPg("factures"); }}
+        />}
 
         {pg === "clients" && !editC && !selC && !profC && <ClientsList clients={cls} onSelect={c => setProfC(c)} onAdd={() => setEditC("new")} />}
         {pg === "clients" && profC && !editC && !selC && <ClientProfil client={profC} devis={dvs} factures={fcs} onBack={() => setProfC(null)} onEdit={() => { setSelC(profC); setProfC(null); }} />}
