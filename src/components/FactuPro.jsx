@@ -1241,34 +1241,33 @@ export default function FactuPro() {
     if (updated && (updated.statut !== selD.statut || updated.signature !== selD.signature)) setSelD(updated);
   }, [dvs]);
 
-  // Realtime : mise à jour instantanée quand le client signe depuis son lien
-  useEffect(() => {
-    if (!selD || !entreprise?.id) return;
-    const { supabase: sb } = { supabase: null };
-    let channel;
-    import('../lib/supabase').then(({ supabase: sb }) => {
-      channel = sb
-        .channel('devis-sign-' + selD.dbId)
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'devis',
-          filter: `id=eq.${selD.dbId}`,
-        }, (payload) => {
-          const raw = { ...selD._raw, ...payload.new };
-          setSelD(normDevis(raw));
-          if (payload.new.statut === 'accepte') fl("✅ Devis signé par le client !");
-          if (payload.new.statut === 'refuse') fl("❌ Devis refusé par le client");
-        })
-        .subscribe();
-    });
-    return () => { if (channel) import('../lib/supabase').then(({ supabase: sb }) => sb.removeChannel(channel)); };
-  }, [selD?.dbId]);
-
-  // Polling de secours toutes les 5s si le devis attend une signature
+  // Polling direct toutes les 5s quand un devis est en attente de signature
   useEffect(() => {
     if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
-    const id = setInterval(() => reloadDevis(), 5000);
+    const dbId = selD.dbId;
+    const checkUpdate = async () => {
+      try {
+        const { supabase: sb } = await import('../lib/supabase');
+        const { data } = await sb
+          .from('devis')
+          .select('*, devis_lignes(*)')
+          .eq('id', dbId)
+          .single();
+        if (!data) return;
+        // Comparer avec l'état actuel via setSelD fonctionnel
+        setSelD(prev => {
+          if (!prev || prev.dbId !== dbId) return prev;
+          if (data.statut !== prev._raw.statut || data.signature_url !== prev._raw.signature_url) {
+            if (data.statut === 'accepte' && prev._raw.statut !== 'accepte') fl("✅ Devis signé par le client !");
+            if (data.statut === 'refuse' && prev._raw.statut !== 'refuse') fl("❌ Devis refusé par le client");
+            reloadDevis();
+            return normDevis(data);
+          }
+          return prev;
+        });
+      } catch (e) { /* silencieux */ }
+    };
+    const id = setInterval(checkUpdate, 5000);
     return () => clearInterval(id);
   }, [selD?.dbId, selD?.statut]);
 
