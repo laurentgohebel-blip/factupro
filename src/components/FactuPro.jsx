@@ -1337,8 +1337,21 @@ export default function FactuPro() {
             setEmailModal({ type: "devis", doc: selD, client, signature: selD.signature, defaultMessage: msg });
           }}
           onRefresh={async () => {
-            await reloadDevis();
-            fl("Actualisé ✓");
+            try {
+              const { supabase: sb } = await import('../lib/supabase');
+              const { data, error } = await sb
+                .from('devis')
+                .select('*, devis_lignes(*)')
+                .eq('id', selD.dbId)
+                .single();
+              if (error) throw error;
+              const fresh = normDevis(data);
+              setSelD(fresh);
+              if (fresh.statut === 'accepte' && selD.statut !== 'accepte') fl("✅ Devis signé par le client !");
+              else if (fresh.statut === 'refuse' && selD.statut !== 'refuse') fl("❌ Devis refusé par le client");
+              else fl("Actualisé ✓");
+              reloadDevis();
+            } catch(e) { fl("Erreur : " + e.message); }
           }}
         />}
 
