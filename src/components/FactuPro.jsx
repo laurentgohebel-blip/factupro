@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
 import { useClients, useDevis, useFactures, useCatalogue } from '../lib/data';
+import { supabase } from '../lib/supabase';
 
 /* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
 function normClient(c) { return c; } // same format
@@ -1247,6 +1248,31 @@ export default function FactuPro() {
       setSelD(updated);
     }
   }, [dvs]);
+
+  // Polling auto : tant qu'un devis en attente de signature est ouvert,
+  // on vérifie toutes les 4s si le client l'a signé côté lien public.
+  // Requête directe (pas de boucle : déps figées sur dbId + statut).
+  useEffect(() => {
+    if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
+    const dbId = selD.dbId, curStatut = selD.statut, curSig = selD.signature;
+    let stop = false;
+    const check = async () => {
+      const { data } = await supabase
+        .from('devis')
+        .select('*, devis_lignes(*)')
+        .eq('id', dbId)
+        .single();
+      if (stop || !data) return;
+      if (data.statut !== curStatut || data.signature_url !== curSig) {
+        setSelD(normDevis(data));
+        reloadDevis();
+        if (data.statut === 'accepte') fl('✅ Devis signé par le client !');
+      }
+    };
+    const iv = setInterval(check, 4000);
+    check(); // premier check immédiat à l'ouverture
+    return () => { stop = true; clearInterval(iv); };
+  }, [selD?.dbId, selD?.statut]);
 
   return (
     <div style={{ fontFamily: T.font, background: T.bg, color: T.text, minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto", position: "relative" }}>
