@@ -1234,12 +1234,19 @@ export default function FactuPro() {
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
-  // Sync selD quand les données rechargent (ex: après signature)
+  // Sync selD quand les données rechargent (ex: après signature client)
   useEffect(() => {
     if (!selD) return;
     const updated = dvs.find(d => d.dbId === selD.dbId);
-    if (updated && updated.statut !== selD.statut) setSelD(updated);
+    if (updated && (updated.statut !== selD.statut || updated.signature !== selD.signature)) setSelD(updated);
   }, [dvs]);
+
+  // Recharger les devis toutes les 30s si un devis est ouvert et en attente de signature
+  useEffect(() => {
+    if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
+    const id = setInterval(() => reloadDevis(), 30000);
+    return () => clearInterval(id);
+  }, [selD?.dbId, selD?.statut]);
 
   return (
     <div style={{ fontFamily: T.font, background: T.bg, color: T.text, minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto", position: "relative" }}>
@@ -1291,7 +1298,7 @@ export default function FactuPro() {
 
         {pg === "devis" && !selD && <DevisList devis={dvs} clients={cls} onSelect={d => setSelD(d)} onNew={() => nav("nouveau_devis")} />}
         {pg === "devis" && selD && <DevisDetail devis={selD} client={cls.find(c => c.id === selD.clientId)}
-          onBack={() => setSelD(null)}
+          onBack={() => { setSelD(null); reloadDevis(); }}
           onSign={() => setShowSig(true)}
           onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
           onEmail={() => setEmailModal({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature })}
