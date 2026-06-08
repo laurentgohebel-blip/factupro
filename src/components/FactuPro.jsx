@@ -1234,17 +1234,41 @@ export default function FactuPro() {
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
-  // Sync selD quand les données rechargent (ex: après signature client)
+  // Sync selD quand les données rechargent
   useEffect(() => {
     if (!selD) return;
     const updated = dvs.find(d => d.dbId === selD.dbId);
     if (updated && (updated.statut !== selD.statut || updated.signature !== selD.signature)) setSelD(updated);
   }, [dvs]);
 
-  // Recharger les devis toutes les 30s si un devis est ouvert et en attente de signature
+  // Realtime : mise à jour instantanée quand le client signe depuis son lien
+  useEffect(() => {
+    if (!selD || !entreprise?.id) return;
+    const { supabase: sb } = { supabase: null };
+    let channel;
+    import('../lib/supabase').then(({ supabase: sb }) => {
+      channel = sb
+        .channel('devis-sign-' + selD.dbId)
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'devis',
+          filter: `id=eq.${selD.dbId}`,
+        }, (payload) => {
+          const raw = { ...selD._raw, ...payload.new };
+          setSelD(normDevis(raw));
+          if (payload.new.statut === 'accepte') fl("✅ Devis signé par le client !");
+          if (payload.new.statut === 'refuse') fl("❌ Devis refusé par le client");
+        })
+        .subscribe();
+    });
+    return () => { if (channel) import('../lib/supabase').then(({ supabase: sb }) => sb.removeChannel(channel)); };
+  }, [selD?.dbId]);
+
+  // Polling de secours toutes les 5s si le devis attend une signature
   useEffect(() => {
     if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
-    const id = setInterval(() => reloadDevis(), 30000);
+    const id = setInterval(() => reloadDevis(), 5000);
     return () => clearInterval(id);
   }, [selD?.dbId, selD?.statut]);
 
