@@ -38,7 +38,7 @@ serve(async (req) => {
       });
     }
 
-    const { to, subject, html, replyTo } = await req.json();
+    const { to, subject, html, replyTo, attachment } = await req.json();
 
     if (!to || !subject || !html) {
       return new Response(JSON.stringify({ error: "Paramètres manquants : to, subject, html requis" }), {
@@ -53,14 +53,18 @@ serve(async (req) => {
       to,
       subject,
       html,
-      text, // version texte brut = meilleure délivrabilité
+      text,
       headers: {
-        "X-Entity-Ref-ID": crypto.randomUUID(), // évite la déduplication Gmail
+        "X-Entity-Ref-ID": crypto.randomUUID(),
       },
     };
 
-    // Reply-To = email de l'artisan si fourni
     if (replyTo) payload.reply_to = replyTo;
+
+    // Pièce jointe PDF (base64)
+    if (attachment?.content && attachment?.filename) {
+      payload.attachments = [{ filename: attachment.filename, content: attachment.content }];
+    }
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",

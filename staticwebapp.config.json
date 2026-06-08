@@ -7,6 +7,10 @@
     {
       "route": "/login",
       "rewrite": "/index.html"
+    },
+    {
+      "route": "/sign/*",
+      "rewrite": "/index.html"
     }
   ],
   "navigationFallback": {

@@ -3,6 +3,7 @@ import { useAuth } from './lib/auth'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import FactuPro from './components/FactuPro'
+import SignaturePage from './pages/SignaturePage'
 
 function RequireAuth({ children }) {
   const { user, entreprise, loading } = useAuth()
@@ -33,6 +34,7 @@ export default function App() {
           <FactuPro />
         </RequireAuth>
       } />
+      <Route path="/sign/:devisId" element={<SignaturePage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

@@ -33,20 +33,42 @@ const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
-async function sendEmailViaResend(to, subject, html, replyTo) {
+async function sendEmailViaResend(to, subject, html, replyTo, attachment) {
   const { supabase } = await import('../lib/supabase');
   const { data, error } = await supabase.functions.invoke('send-email', {
-    body: { to, subject, html, replyTo },
+    body: { to, subject, html, replyTo, attachment },
   });
-  // Le SDK Supabase lève une erreur générique sur non-2xx — on remonte le vrai message Resend
   if (error) {
-    // Essaie de récupérer le corps de l'erreur (contenu JSON de la Edge Function)
     const msg = error?.context?.json?.error || error?.message || 'Erreur inconnue';
     throw new Error(msg);
   }
-  // La Edge Function renvoie { error } avec status 200 pour exposer le message Resend
   if (data?.error) throw new Error(data.error);
   return data;
+}
+
+async function generatePDFAttachment(type, doc, client, entreprise) {
+  const { default: html2pdf } = await import('html2pdf.js');
+  const htmlContent = generatePDFHtml(type, doc, client, doc.signature || null, entreprise);
+  const container = document.createElement('div');
+  container.innerHTML = htmlContent;
+  container.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:white;';
+  document.body.appendChild(container);
+  try {
+    const blob = await html2pdf().set({
+      margin: 0,
+      filename: 'doc.pdf',
+      image: { type: 'jpeg', quality: 0.92 },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    }).from(container).outputPdf('blob');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    bytes.forEach(b => binary += String.fromCharCode(b));
+    const filename = `${type === 'facture' ? 'Facture' : 'Devis'}-${doc.id}.pdf`;
+    return { content: btoa(binary), filename };
+  } finally {
+    document.body.removeChild(container);
+  }
 }
 
 function defaultMessage(type, doc, client, entreprise) {
@@ -174,12 +196,13 @@ SIRET : ${e.siret || ""}`;
   return { subject, body, to: client?.email || "" };
 }
 
-function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent }) {
+function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent, defaultMessage: initMessage }) {
   const { subject, to } = buildEmailContent(type, doc, client, entreprise);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState(() => defaultMessage(type, doc, client, entreprise));
+  const [message, setMessage] = useState(() => initMessage || defaultMessage(type, doc, client, entreprise));
+  const [attachPdf, setAttachPdf] = useState(true);
 
   async function handleSend() {
     if (!to) { setError("Aucun email renseigné pour ce client."); return; }
@@ -187,7 +210,12 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
     try {
       const html = buildEmailHtml(type, doc, client, entreprise, message);
       const replyTo = entreprise?.email || undefined;
-      await sendEmailViaResend(to, subject, html, replyTo);
+      let attachment = null;
+      if (attachPdf) {
+        try { attachment = await generatePDFAttachment(type, doc, client, entreprise); }
+        catch (e) { console.warn("PDF attachment failed:", e); }
+      }
+      await sendEmailViaResend(to, subject, html, replyTo, attachment);
       setSent(true);
       setTimeout(() => { onClose(); onSent?.(); }, 1500);
     } catch (e) {
@@ -218,24 +246,22 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent 
         {/* Message personnalisé */}
         <div style={{ marginBottom: 14 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: T.textMuted, display: "block", marginBottom: 6 }}>MESSAGE D'ACCOMPAGNEMENT</label>
-          <textarea
-            value={message}
-            onChange={e => setMessage(e.target.value)}
-            rows={7}
-            style={{ width: "100%", padding: "12px 14px", borderRadius: T.radiusSm, border: `1.5px solid ${T.border}`, background: T.bgElevated, color: T.text, fontSize: 13, lineHeight: 1.6, fontFamily: T.font, resize: "vertical", boxSizing: "border-box", outline: "none" }}
-          />
+          <textarea value={message} onChange={e => setMessage(e.target.value)} rows={6}
+            style={{ width: "100%", padding: "12px 14px", borderRadius: T.radiusSm, border: `1.5px solid ${T.border}`, background: T.bgElevated, color: T.text, fontSize: 13, lineHeight: 1.6, fontFamily: T.font, resize: "vertical", boxSizing: "border-box", outline: "none" }} />
         </div>
 
-        <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#065F46" }}>
-          📄 Le détail ({type === "facture" ? "lignes, totaux, échéance, IBAN" : "lignes, totaux, validité"}) est ajouté automatiquement sous votre message.
-        </div>
+        {/* Option PDF */}
+        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: T.bgElevated, borderRadius: T.radiusSm, marginBottom: 14, cursor: "pointer" }}>
+          <input type="checkbox" checked={attachPdf} onChange={e => setAttachPdf(e.target.checked)} style={{ width: 16, height: 16, accentColor: T.primary }} />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>📎 Joindre le PDF en pièce jointe</span>
+        </label>
 
         {error && <div style={{ background: T.dangerPale, border: `1px solid #FECACA`, borderRadius: T.radiusXs, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#991B1B" }}>⚠ {error}</div>}
 
         {sent
           ? <div style={{ background: T.primaryPale, borderRadius: T.radiusSm, padding: 16, textAlign: "center", fontSize: 15, fontWeight: 700, color: T.primary }}>✓ Email envoyé !</div>
           : <button className="btn-press" onClick={handleSend} disabled={sending || !to} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: sending ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: sending ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>
-              {sending ? "Envoi en cours..." : `✉ Envoyer à ${to || "..."}`}
+              {sending ? (attachPdf ? "Génération PDF..." : "Envoi en cours...") : `✉ Envoyer à ${to || "..."}`}
             </button>
         }
       </div>
@@ -682,7 +708,7 @@ function DevisList({ devis, clients, onSelect, onNew }) {
   </div>;
 }
 
-function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture }) {
+function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink }) {
   const ht = tl(devis.lignes), tv = devis.tva || 10, tva = ht * tv / 100, tot = ht + tva;
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2><Badge statut={devis.statut} /></div>
@@ -704,6 +730,7 @@ function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF
       {!devis.signature && devis.statut === "en_attente" && <button className="btn-press" onClick={onSign} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✍ Signer</button>}
       {(devis.statut === "accepte" || devis.signature) && devis.statut !== "facture" && <button className="btn-press" onClick={onConvert} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>→ Facturer</button>}
       {devis.statut === "facture" && <button className="btn-press" onClick={onViewFacture} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: "#6366F1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🧾 Voir la facture</button>}
+      {!devis.signature && devis.statut !== "facture" && devis.statut !== "refuse" && <button className="btn-press" onClick={onSendSignLink} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: "#0EA5E9", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🔗 Lien de signature</button>}
       <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
       <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
       <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>
@@ -1282,6 +1309,13 @@ export default function FactuPro() {
             const facture = fcs.find(f => f.devisId === selD.dbId);
             if (facture) { setSelF(facture); setSelD(null); setPg("factures"); }
             else fl("Facture introuvable");
+          }}
+          onSendSignLink={() => {
+            const signUrl = `${window.location.origin}/sign/${selD.dbId}`;
+            const client = cls.find(c => c.id === selD.clientId);
+            const e = entreprise || {};
+            const msg = `Bonjour ${client?.nom || ""},\n\nVeuillez trouver ci-dessous votre devis ${selD.id}.\n\nPour l'accepter et le signer électroniquement, cliquez sur le lien ci-dessous :\n👉 ${signUrl}\n\nCordialement,\n${e.nom || ""}`;
+            setEmailModal({ type: "devis", doc: selD, client, signature: selD.signature, defaultMessage: msg });
           }}
         />}
 
