@@ -51,21 +51,22 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   const htmlContent = generatePDFHtml(type, doc, client, doc.signature || null, entreprise);
   const container = document.createElement('div');
   container.innerHTML = htmlContent;
-  container.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:white;';
+  // Visible dans le DOM mais hors écran pour que html2canvas puisse le rendre
+  container.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px;background:white;z-index:-1;';
   document.body.appendChild(container);
+  // Laisser le navigateur rendre le contenu avant capture
+  await new Promise(r => setTimeout(r, 300));
   try {
-    const blob = await html2pdf().set({
-      margin: 0,
+    const dataUri = await html2pdf().set({
+      margin: [8, 10],
       filename: 'doc.pdf',
-      image: { type: 'jpeg', quality: 0.92 },
-      html2canvas: { scale: 2, useCORS: true, logging: false },
+      image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, logging: false, allowTaint: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    }).from(container).outputPdf('blob');
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    let binary = '';
-    bytes.forEach(b => binary += String.fromCharCode(b));
+    }).from(container).outputPdf('datauristring');
+    const base64 = dataUri.split(',')[1];
     const filename = `${type === 'facture' ? 'Facture' : 'Devis'}-${doc.id}.pdf`;
-    return { content: btoa(binary), filename };
+    return { content: base64, filename };
   } finally {
     document.body.removeChild(container);
   }
@@ -113,7 +114,11 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
   <!-- Body -->
   <div style="padding:28px 32px">
     <h2 style="font-size:20px;font-weight:700;color:#1a1a18;margin:0 0 16px">${ti} ${doc.id}</h2>
-    ${customMessage ? `<div style="font-size:14px;color:#333;line-height:1.7;margin-bottom:24px;white-space:pre-line">${customMessage.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>` : `<p style="font-size:14px;color:#666;margin:0 0 24px">Bonjour ${client?.nom || ""},<br>Veuillez trouver ci-dessous votre ${ti.toLowerCase()}.</p>`}
+    ${customMessage ? `<div style="font-size:14px;color:#333;line-height:1.7;margin-bottom:24px;white-space:pre-line">${
+      customMessage
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" style="color:#1B4332;font-weight:600">$1</a>')
+    }</div>` : `<p style="font-size:14px;color:#666;margin:0 0 24px">Bonjour ${client?.nom || ""},<br>Veuillez trouver ci-dessous votre ${ti.toLowerCase()}.</p>`}
 
     <!-- Client -->
     <div style="background:#f0f7f2;border-radius:10px;padding:14px 16px;margin-bottom:20px">
