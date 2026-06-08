@@ -401,22 +401,92 @@ function CatPicker({ cat, onSel, onClose }) {
 
 function SigPad({ onSave, onNo }) {
   const ref = useRef(null), dr = useRef(false), lp = useRef({ x: 0, y: 0 });
-  useEffect(() => { const c = ref.current, ctx = c.getContext("2d"); c.width = c.offsetWidth * 2; c.height = c.offsetHeight * 2; ctx.scale(2, 2); ctx.strokeStyle = T.text; ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.lineJoin = "round"; }, []);
-  const gp = e => { const r = ref.current.getBoundingClientRect(), t = e.touches ? e.touches[0] : e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
-  const ev = { onMouseDown: e => { e.preventDefault(); dr.current = true; lp.current = gp(e); }, onMouseMove: e => { if (!dr.current) return; const p = gp(e), ctx = ref.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(lp.current.x, lp.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); lp.current = p; }, onMouseUp: () => { dr.current = false; }, onMouseLeave: () => { dr.current = false; }, onTouchStart: e => { e.preventDefault(); dr.current = true; lp.current = gp(e); }, onTouchMove: e => { if (!dr.current) return; const p = gp(e), ctx = ref.current.getContext("2d"); ctx.beginPath(); ctx.moveTo(lp.current.x, lp.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); lp.current = p; }, onTouchEnd: () => { dr.current = false; } };
-  return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onNo}>
-    <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
-      <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Signature client</h3>
-      <p style={{ fontSize: 12, color: T.textMuted, marginBottom: 14 }}>Signez ci-dessous</p>
-      <div style={{ border: `2px dashed ${T.border}`, borderRadius: 12, overflow: "hidden", background: "#FAFAF8", marginBottom: 14 }}><canvas ref={ref} style={{ width: "100%", height: 160, touchAction: "none", cursor: "crosshair" }} {...ev} /></div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn-press" onClick={() => { ref.current.getContext("2d").clearRect(0, 0, ref.current.width, ref.current.height); }} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Effacer</button>
-        <div style={{ flex: 1 }} />
-        <button className="btn-press" onClick={onNo} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Annuler</button>
-        <button className="btn-press" onClick={() => onSave(ref.current.toDataURL("image/png"))} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Valider</button>
+  const initialized = useRef(false);
+
+  function initCanvas() {
+    const c = ref.current;
+    if (!c || initialized.current) return;
+    const w = c.offsetWidth;
+    const h = c.offsetHeight;
+    if (w === 0 || h === 0) return; // pas encore rendu
+    const dpr = window.devicePixelRatio || 1;
+    c.width = w * dpr;
+    c.height = h * dpr;
+    const ctx = c.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.strokeStyle = "#1a1a18";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    initialized.current = true;
+  }
+
+  useEffect(() => {
+    // Essaie immédiatement, puis via RAF si le canvas n'est pas encore dimensionné
+    initCanvas();
+    if (!initialized.current) {
+      const id = requestAnimationFrame(() => {
+        initCanvas();
+        if (!initialized.current) {
+          // Dernier recours : ResizeObserver
+          const ro = new ResizeObserver(() => { initCanvas(); if (initialized.current) ro.disconnect(); });
+          if (ref.current) ro.observe(ref.current);
+        }
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, []);
+
+  function getPos(e) {
+    const r = ref.current.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
+  }
+
+  function draw(e) {
+    if (!dr.current) return;
+    e.preventDefault();
+    const p = getPos(e);
+    const ctx = ref.current.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(lp.current.x, lp.current.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    lp.current = p;
+  }
+
+  function clear() {
+    const c = ref.current;
+    c.getContext("2d").clearRect(0, 0, c.width, c.height);
+  }
+
+  const ev = {
+    onMouseDown:  e => { e.preventDefault(); dr.current = true; lp.current = getPos(e); },
+    onMouseMove:  e => draw(e),
+    onMouseUp:    () => { dr.current = false; },
+    onMouseLeave: () => { dr.current = false; },
+    onTouchStart: e => { e.preventDefault(); dr.current = true; lp.current = getPos(e); },
+    onTouchMove:  e => draw(e),
+    onTouchEnd:   () => { dr.current = false; },
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onNo}>
+      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Signature client</h3>
+        <p style={{ fontSize: 12, color: T.textMuted, marginBottom: 14 }}>Signez dans la zone ci-dessous</p>
+        <div style={{ border: `2px dashed ${T.border}`, borderRadius: 12, overflow: "hidden", background: "#FAFAF8", marginBottom: 14, touchAction: "none" }}>
+          <canvas ref={ref} style={{ display: "block", width: "100%", height: 180, cursor: "crosshair", touchAction: "none" }} {...ev} />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-press" onClick={clear} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Effacer</button>
+          <div style={{ flex: 1 }} />
+          <button className="btn-press" onClick={onNo} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Annuler</button>
+          <button className="btn-press" onClick={() => onSave(ref.current.toDataURL("image/png"))} style={{ padding: "8px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Valider</button>
+        </div>
       </div>
     </div>
-  </div>;
+  );
 }
 
 function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
