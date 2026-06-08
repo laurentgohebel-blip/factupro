@@ -720,10 +720,15 @@ function DevisList({ devis, clients, onSelect, onNew }) {
   </div>;
 }
 
-function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink }) {
+function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink, onRefresh }) {
   const ht = tl(devis.lignes), tv = devis.tva || 10, tva = ht * tv / 100, tot = ht + tva;
   return <div>
-    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2><Badge statut={devis.statut} /></div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
+      <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2>
+      <Badge statut={devis.statut} />
+      {['en_attente', 'envoye'].includes(devis.statut) && <button className="btn-press" onClick={onRefresh} title="Actualiser" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🔄</button>}
+    </div>
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Client</div><div style={{ fontWeight: 600, fontSize: 15 }}>{client?.nom}</div><div style={{ fontSize: 12, color: T.textMuted }}>{client?.adresse}</div>
       <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12 }}><span><span style={{ color: T.textMuted }}>Date</span> {dfr(devis.date)}</span><span><span style={{ color: T.textMuted }}>TVA</span> {tv}%</span></div>
@@ -1234,42 +1239,14 @@ export default function FactuPro() {
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
-  // Sync selD quand les données rechargent
+  // Sync selD quand rawDevis est rechargé (après reloadDevis)
   useEffect(() => {
     if (!selD) return;
     const updated = dvs.find(d => d.dbId === selD.dbId);
-    if (updated && (updated.statut !== selD.statut || updated.signature !== selD.signature)) setSelD(updated);
+    if (updated && (updated.statut !== selD.statut || updated.signature !== selD.signature)) {
+      setSelD(updated);
+    }
   }, [dvs]);
-
-  // Polling direct toutes les 5s quand un devis est en attente de signature
-  useEffect(() => {
-    if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
-    const dbId = selD.dbId;
-    const checkUpdate = async () => {
-      try {
-        const { supabase: sb } = await import('../lib/supabase');
-        const { data } = await sb
-          .from('devis')
-          .select('*, devis_lignes(*)')
-          .eq('id', dbId)
-          .single();
-        if (!data) return;
-        // Comparer avec l'état actuel via setSelD fonctionnel
-        setSelD(prev => {
-          if (!prev || prev.dbId !== dbId) return prev;
-          if (data.statut !== prev._raw.statut || data.signature_url !== prev._raw.signature_url) {
-            if (data.statut === 'accepte' && prev._raw.statut !== 'accepte') fl("✅ Devis signé par le client !");
-            if (data.statut === 'refuse' && prev._raw.statut !== 'refuse') fl("❌ Devis refusé par le client");
-            reloadDevis();
-            return normDevis(data);
-          }
-          return prev;
-        });
-      } catch (e) { /* silencieux */ }
-    };
-    const id = setInterval(checkUpdate, 5000);
-    return () => clearInterval(id);
-  }, [selD?.dbId, selD?.statut]);
 
   return (
     <div style={{ fontFamily: T.font, background: T.bg, color: T.text, minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto", position: "relative" }}>
@@ -1358,6 +1335,10 @@ export default function FactuPro() {
             const e = entreprise || {};
             const msg = `Bonjour ${client?.nom || ""},\n\nVeuillez trouver ci-dessous votre devis ${selD.id}.\n\nPour l'accepter et le signer électroniquement, cliquez sur le lien ci-dessous :\n👉 ${signUrl}\n\nCordialement,\n${e.nom || ""}`;
             setEmailModal({ type: "devis", doc: selD, client, signature: selD.signature, defaultMessage: msg });
+          }}
+          onRefresh={async () => {
+            await reloadDevis();
+            fl("Actualisé ✓");
           }}
         />}
 
