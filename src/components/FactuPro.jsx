@@ -748,21 +748,64 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
   </div>;
 }
 
-function FacturesList({ factures, clients, onPDF, onPay, onEmail, onNew }) {
+function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onDelete }) {
+  const ht = tl(facture.lignes), tv = facture.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const p = PAIEMENTS.find(y => y.v === facture.paiement);
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+      <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
+      <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{facture.id}</h2>
+      <Badge statut={facture.statut} />
+    </div>
+
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Client</div>
+      <div style={{ fontWeight: 600, fontSize: 15 }}>{client?.nom}</div>
+      <div style={{ fontSize: 12, color: T.textMuted }}>{client?.adresse}</div>
+      <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 12, flexWrap: "wrap" }}>
+        <span><span style={{ color: T.textMuted }}>Date </span>{dfr(facture.date)}</span>
+        <span><span style={{ color: T.textMuted }}>Échéance </span>{dfr(facture.echeance)}</span>
+        <span><span style={{ color: T.textMuted }}>TVA </span>{tv}%</span>
+        {p && <span>{p.i} {p.l}</span>}
+      </div>
+    </div>
+
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
+      {facture.lignes.map((l, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: i < facture.lignes.length - 1 ? `1px solid ${T.borderLight}` : "none" }}>
+        <div><div style={{ fontSize: 13, fontWeight: 500 }}>{l.desc}</div><div style={{ fontSize: 11, color: T.textMuted }}>{l.qte} {l.unite} × {fmt(l.pu)}</div></div>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(l.qte * l.pu)}</div>
+      </div>)}
+      <div style={{ borderTop: `2px solid ${T.primary}`, marginTop: 8, paddingTop: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textMuted }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary, marginTop: 4 }}><span>TTC</span><span>{fmt(tot)}</span></div>
+      </div>
+    </div>
+
+    {facture.datePaiement && <div style={{ background: T.primaryPale, borderRadius: T.radius, padding: 14, boxShadow: T.shadow, marginBottom: 10, fontSize: 13, color: "#065F46" }}>
+      ✓ Payée le {dfr(facture.datePaiement)}
+    </div>}
+
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {facture.statut !== "payee" && <button className="btn-press" onClick={() => onPay(facture.dbId)} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰 Marquer payée</button>}
+      <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
+      <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
+      <button className="btn-press" onClick={onDelete} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>🗑</button>
+    </div>
+  </div>;
+}
+
+function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNew }) {
   const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
   const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
   return <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div>
     <Search v={q} set={setQ} /><Chips opts={[{ v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
-    {f.map(x => { const cl = clients.find(c => c.id === x.clientId); const p = PAIEMENTS.find(y => y.v === x.paiement); return <div key={x.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow }}>
-      <div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{x.id}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div>{p && <div style={{ fontSize: 11, marginTop: 3 }}>{p.i} {p.l}</div>}</div>
-      <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(x))}</div><div style={{ marginTop: 4 }}><Badge statut={x.statut} /></div>
-        <div style={{ display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" }}>
-          <button className="btn-press" onClick={() => onPDF(x)} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄</button>
-            <button className="btn-press" onClick={() => onEmail(x)} style={{ padding: "4px 8px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉</button>
-          {x.statut !== "payee" && <button className="btn-press" onClick={() => onPay(x.dbId || x.id)} style={{ padding: "4px 8px", borderRadius: 6, border: "none", background: T.primary, color: "#fff", fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰</button>}
-        </div>
-      </div></div>
+    {f.map(x => { const cl = clients.find(c => c.id === x.clientId); return <div key={x.id} className="card-hover" onClick={() => onSelect(x)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div><div style={{ fontWeight: 700, fontSize: 14 }}>{x.id}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
+        <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(x))}</div><div style={{ marginTop: 4 }}><Badge statut={x.statut} /></div></div>
+      </div>
     </div>; })}
   </div>;
 }
@@ -1134,6 +1177,7 @@ export default function FactuPro() {
 
   const [pg, setPg] = useState("dashboard");
   const [selD, setSelD] = useState(null);
+  const [selF, setSelF] = useState(null);
   const [selC, setSelC] = useState(null);
   const [profC, setProfC] = useState(null);
   const [editC, setEditC] = useState(false);
@@ -1146,7 +1190,7 @@ export default function FactuPro() {
   const [emailModal, setEmailModal] = useState(null); // { type, doc, client, signature }
 
   const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
-  const nav = p => { setPg(p); setSelD(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
+  const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
@@ -1258,11 +1302,25 @@ export default function FactuPro() {
           }}
         />}
 
-        {pg === "factures" && <FacturesList factures={fcs} clients={cls}
+        {pg === "factures" && !selF && <FacturesList factures={fcs} clients={cls}
+          onSelect={f => setSelF(f)}
           onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
           onEmail={f => setEmailModal({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null })}
           onPay={id => setPayPick(id)}
           onNew={() => nav("nouvelle_facture")}
+        />}
+        {pg === "factures" && selF && <FactureDetail
+          facture={selF}
+          client={cls.find(c => c.id === selF.clientId)}
+          onBack={() => setSelF(null)}
+          onPDF={() => setPdf({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null, entreprise })}
+          onEmail={() => setEmailModal({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null })}
+          onPay={id => setPayPick(id)}
+          onDelete={() => setConf({ m: `Supprimer ${selF.id} ?`, fn: async () => {
+            const { supabase } = await import('../lib/supabase');
+            await supabase.from('factures').delete().eq('id', selF.dbId);
+            setSelF(null); fl("Facture supprimée");
+          }})}
         />}
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
