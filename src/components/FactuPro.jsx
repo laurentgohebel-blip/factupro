@@ -682,7 +682,7 @@ function DevisList({ devis, clients, onSelect, onNew }) {
   </div>;
 }
 
-function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail }) {
+function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture }) {
   const ht = tl(devis.lignes), tv = devis.tva || 10, tva = ht * tv / 100, tot = ht + tva;
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2><Badge statut={devis.statut} /></div>
@@ -703,6 +703,7 @@ function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
       {!devis.signature && devis.statut === "en_attente" && <button className="btn-press" onClick={onSign} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✍ Signer</button>}
       {(devis.statut === "accepte" || devis.signature) && devis.statut !== "facture" && <button className="btn-press" onClick={onConvert} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>→ Facturer</button>}
+      {devis.statut === "facture" && <button className="btn-press" onClick={onViewFacture} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: "#6366F1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🧾 Voir la facture</button>}
       <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
       <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
       <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>
@@ -1277,6 +1278,11 @@ export default function FactuPro() {
           onDelete={() => setConf({ m: `Supprimer ${selD.id} ?`, fn: async () => {
             await deleteDevis(selD.dbId); setSelD(null); fl("Supprimé");
           } })}
+          onViewFacture={() => {
+            const facture = fcs.find(f => f.devisId === selD.dbId);
+            if (facture) { setSelF(facture); setSelD(null); setPg("factures"); }
+            else fl("Facture introuvable");
+          }}
         />}
 
         {pg === "nouveau_devis" && <DevisForm clients={cls} catalogue={cat} init={dup}
