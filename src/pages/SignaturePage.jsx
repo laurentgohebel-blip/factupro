@@ -26,13 +26,6 @@ export default function SignaturePage() {
 
   async function fetchDevis() {
     try {
-      const { data, error } = await supabase.functions.invoke('get-devis-public', {
-        body: null,
-        headers: {},
-        method: 'GET',
-        query: { id: devisId },
-      })
-      // Fallback: fetch direct via URL
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-devis-public?id=${devisId}`,
         { headers: { 'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY, 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}` } }

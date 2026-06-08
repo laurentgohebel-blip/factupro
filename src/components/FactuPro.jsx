@@ -49,19 +49,26 @@ async function sendEmailViaResend(to, subject, html, replyTo, attachment) {
 async function generatePDFAttachment(type, doc, client, entreprise) {
   const { default: html2pdf } = await import('html2pdf.js');
   const htmlContent = generatePDFHtml(type, doc, client, doc.signature || null, entreprise);
+
+  // html2pdf ne sait pas rendre un document complet — on extrait uniquement le <body>
+  const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  const bodyContent = bodyMatch ? bodyMatch[1] : htmlContent;
+
+  // Extraire les styles <style> du <head> et les injecter
+  const styleMatch = htmlContent.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
+  const styles = styleMatch.join('');
+
   const container = document.createElement('div');
-  container.innerHTML = htmlContent;
-  // Visible dans le DOM mais hors écran pour que html2canvas puisse le rendre
-  container.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px;background:white;z-index:-1;';
+  container.innerHTML = styles + bodyContent;
+  container.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px;background:white;';
   document.body.appendChild(container);
-  // Laisser le navigateur rendre le contenu avant capture
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 400));
   try {
     const dataUri = await html2pdf().set({
       margin: [8, 10],
       filename: 'doc.pdf',
       image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, logging: false, allowTaint: true },
+      html2canvas: { scale: 2, useCORS: false, logging: false, backgroundColor: '#ffffff' },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     }).from(container).outputPdf('datauristring');
     const base64 = dataUri.split(',')[1];
