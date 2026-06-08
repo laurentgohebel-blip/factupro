@@ -1212,9 +1212,19 @@ export default function FactuPro() {
           onConvert={async () => {
             try {
               const raw = selD._raw;
-              await creerDepuisDevis(raw);
+              const newFac = await creerDepuisDevis(raw);
               await reloadDevis();
-              setSelD(null); setPg("factures"); fl("Facture créée ✓");
+              // Construire la facture normalisée avec les lignes du devis
+              const newFacNorm = normFacture({
+                ...newFac,
+                facture_lignes: raw.devis_lignes || [],
+              });
+              const client = cls.find(c => c.id === selD.clientId);
+              setSelD(null);
+              setPg("factures");
+              fl("Facture créée ✓");
+              // Ouvrir la modale email pour envoyer la facture au client
+              setEmailModal({ type: "facture", doc: newFacNorm, client, signature: null });
             } catch (e) { fl("Erreur: " + e.message); }
           }}
           onDelete={() => setConf({ m: `Supprimer ${selD.id} ?`, fn: async () => {
