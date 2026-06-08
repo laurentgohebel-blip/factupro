@@ -1332,6 +1332,7 @@ export default function FactuPro() {
           onConvert={async () => {
             try {
               const raw = selD._raw;
+              if (!raw || !raw.id) { alert("Bug Facturer : données du devis manquantes (_raw). Rechargez la page (F5) et réessayez."); return; }
               const newFac = await creerDepuisDevis(raw);
               await reloadDevis();
               // Construire la facture normalisée avec les lignes du devis
@@ -1345,7 +1346,7 @@ export default function FactuPro() {
               fl("Facture créée ✓");
               // Ouvrir la modale email pour envoyer la facture au client
               setEmailModal({ type: "facture", doc: newFacNorm, client, signature: null });
-            } catch (e) { fl("Erreur: " + e.message); }
+            } catch (e) { console.error("Facturer:", e); alert("Erreur lors de la facturation : " + (e?.message || e)); }
           }}
           onDelete={() => setConf({ m: `Supprimer ${selD.id} ?`, fn: async () => {
             await deleteDevis(selD.dbId); setSelD(null); fl("Supprimé");

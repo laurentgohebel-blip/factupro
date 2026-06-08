@@ -30,11 +30,13 @@ serve(async (req) => {
 
     // .select() renvoie les lignes réellement modifiées → on peut vérifier
     // qu'au moins une ligne a bien été touchée.
+    // On autorise la signature quel que soit le statut courant, SAUF si le
+    // devis est déjà facturé (on ne réécrit pas un devis transformé).
     const { data, error } = await supabase
       .from("devis")
       .update(updates)
       .eq("id", devisId)
-      .in("statut", ["en_attente", "envoye"]) // seulement si pas déjà traité
+      .neq("statut", "facture")
       .select("id, statut, signature_url");
 
     if (error) throw error;
