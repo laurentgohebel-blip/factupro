@@ -65,64 +65,134 @@ async function shrinkDataUrl(dataUrl, maxW = 360) {
   } catch { return null; }
 }
 
+// Génération du PDF NATIVEMENT avec jsPDF (texte/tableau dessinés, pas de
+// capture d'écran). html2canvas rend une page blanche sur certains mobiles /
+// en mode PWA — cette approche est fiable partout.
 async function generatePDFAttachment(type, doc, client, entreprise) {
-  const { default: html2pdf } = await import('html2pdf.js');
-  // ⚠️ On ne passe PAS la signature au HTML : html2canvas plante sur les
-  // images data-URI (PDF blanc). On rend le document sans image, puis on
-  // tamponne la signature directement via jsPDF (addImage gère les data-URI).
+  const { jsPDF } = await import('jspdf');
   const signature = await shrinkDataUrl(doc.signature || null);
-  const htmlContent = generatePDFHtml(type, doc, client, null, entreprise);
+  const e = entreprise || {};
+  const isF = type === 'facture';
+  const ti = isF ? 'FACTURE' : 'DEVIS';
+  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const money = n => (n || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\s/g, ' ').replace(/[  ]/g, ' ') + ' €';
+  const GREEN = [27, 67, 50];
 
-  // html2pdf ne sait pas rendre un document complet — on extrait uniquement le <body>
-  const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  const bodyContent = bodyMatch ? bodyMatch[1] : htmlContent;
+  const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const PW = pdf.internal.pageSize.getWidth();
+  const PH = pdf.internal.pageSize.getHeight();
+  const M = 15;
+  const ensure = (need) => { if (y + need > PH - M) { pdf.addPage(); y = M; } };
+  let y = M;
 
-  // Extraire les styles <style> du <head> et les injecter
-  const styleMatch = htmlContent.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
-  const styles = styleMatch.join('');
+  // ── En-tête ──
+  pdf.setTextColor(...GREEN); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20);
+  pdf.text('FactuPro', M, y + 2);
+  pdf.setTextColor(20); pdf.setFontSize(11);
+  pdf.text(e.nom || '', M, y + 9);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(110);
+  let hy = y + 14;
+  if (e.adresse) { pdf.text(String(e.adresse), M, hy); hy += 4; }
+  const contact = [e.tel, e.email].filter(Boolean).join('   ');
+  if (contact) { pdf.text(contact, M, hy); hy += 4; }
+  const legal = ['SIRET ' + (e.siret || '—'), e.ape ? 'APE ' + e.ape : '', e.tva_intra ? 'TVA ' + e.tva_intra : ''].filter(Boolean).join('   ');
+  if (legal) { pdf.text(legal, M, hy); hy += 4; }
 
-  // Le document est rendu DANS le viewport (sinon html2canvas ne le peint pas
-  // sur mobile → PDF blanc), mais masqué sous un voile blanc plein écran.
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483646;';
-  const container = document.createElement('div');
-  container.innerHTML = styles + bodyContent;
-  container.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;z-index:2147483645;';
-  document.body.appendChild(container);
-  document.body.appendChild(overlay);
-  await new Promise(r => setTimeout(r, 250));
+  pdf.setTextColor(...GREEN); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18);
+  pdf.text(ti, PW - M, y + 2, { align: 'right' });
+  pdf.setTextColor(20); pdf.setFontSize(12);
+  pdf.text(String(doc.id || ''), PW - M, y + 9, { align: 'right' });
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(110);
+  pdf.text('Date : ' + dfr(doc.date), PW - M, y + 14, { align: 'right' });
+  pdf.text((isF ? 'Echeance : ' + dfr(doc.echeance) : 'Validite : ' + dfr(doc.validite)), PW - M, y + 18, { align: 'right' });
 
-  try {
-    const worker = html2pdf().set({
-      margin: [8, 10],
-      filename: 'doc.pdf',
-      image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: false, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    }).from(container).toPdf();
+  y = Math.max(hy, y + 22) + 4;
 
-    const pdf = await worker.get('pdf');
+  // ── Bloc client ──
+  pdf.setFillColor(240, 247, 242); pdf.roundedRect(M, y, PW - 2 * M, 19, 2, 2, 'F');
+  pdf.setTextColor(110); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7);
+  pdf.text('CLIENT', M + 4, y + 5);
+  pdf.setTextColor(20); pdf.setFontSize(11);
+  pdf.text(client?.nom || '', M + 4, y + 11);
+  pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(90);
+  if (client?.adresse) pdf.text(String(client.adresse), M + 4, y + 16);
+  y += 25;
 
-    // Tampon de la signature sur la dernière page (jsPDF, fiable pour les data-URI)
-    if (signature) {
-      const pages = pdf.internal.getNumberOfPages();
-      pdf.setPage(pages);
-      const pw = pdf.internal.pageSize.getWidth();
-      const ph = pdf.internal.pageSize.getHeight();
-      const sigW = 45, sigH = 20, x = pw - sigW - 12, y = ph - sigH - 16;
-      pdf.setFontSize(8); pdf.setTextColor(100);
-      pdf.text("Bon pour accord — signé électroniquement", x + sigW, y - 2, { align: "right" });
-      try { pdf.addImage(signature, "JPEG", x, y, sigW, sigH); } catch (e) { console.warn("addImage signature:", e); }
-    }
+  // ── En-tête tableau ──
+  const C = { desc: M + 2, qte: 118, pu: 152, tot: PW - M - 2 };
+  pdf.setFillColor(...GREEN); pdf.rect(M, y, PW - 2 * M, 8, 'F');
+  pdf.setTextColor(255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(8);
+  pdf.text('DESCRIPTION', C.desc, y + 5.3);
+  pdf.text('QTE', C.qte, y + 5.3, { align: 'center' });
+  pdf.text('P.U.', C.pu, y + 5.3, { align: 'right' });
+  pdf.text('TOTAL HT', C.tot, y + 5.3, { align: 'right' });
+  y += 8;
 
-    const dataUri = pdf.output('datauristring');
-    const base64 = dataUri.split(',')[1];
-    const filename = `${type === 'facture' ? 'Facture' : 'Devis'}-${doc.id}.pdf`;
-    return { content: base64, filename };
-  } finally {
-    document.body.removeChild(container);
-    document.body.removeChild(overlay);
+  // ── Lignes ──
+  pdf.setFont('helvetica', 'normal'); pdf.setTextColor(30); pdf.setFontSize(9);
+  for (const l of doc.lignes) {
+    const descLines = pdf.splitTextToSize(String(l.desc || ''), 92);
+    const rowH = Math.max(7, descLines.length * 4.2 + 2.8);
+    ensure(rowH);
+    pdf.text(descLines, C.desc, y + 4.5);
+    pdf.text(`${l.qte} ${l.unite}`, C.qte, y + 4.5, { align: 'center' });
+    pdf.text(money(l.pu), C.pu, y + 4.5, { align: 'right' });
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(money(l.qte * l.pu), C.tot, y + 4.5, { align: 'right' });
+    pdf.setFont('helvetica', 'normal');
+    y += rowH;
+    pdf.setDrawColor(230); pdf.setLineWidth(0.2); pdf.line(M, y, PW - M, y);
   }
+  y += 5;
+
+  // ── Totaux ──
+  ensure(24);
+  const tx = PW - M - 70;
+  pdf.setFontSize(9); pdf.setTextColor(70);
+  pdf.text('Total HT', tx, y + 4); pdf.text(money(ht), PW - M, y + 4, { align: 'right' });
+  pdf.text(`TVA (${tv}%)`, tx, y + 9); pdf.text(money(tva), PW - M, y + 9, { align: 'right' });
+  pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.5); pdf.line(tx, y + 12, PW - M, y + 12);
+  pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(...GREEN);
+  pdf.text('Total TTC', tx, y + 19); pdf.text(money(tot), PW - M, y + 19, { align: 'right' });
+  pdf.setFont('helvetica', 'normal'); pdf.setLineWidth(0.2);
+  y += 28;
+
+  // ── Notes ──
+  if (doc.notes) {
+    const lines = pdf.splitTextToSize('Notes : ' + doc.notes, PW - 2 * M - 8);
+    const boxH = lines.length * 4 + 8;
+    ensure(boxH + 4);
+    pdf.setFillColor(250, 250, 247); pdf.roundedRect(M, y, PW - 2 * M, boxH, 2, 2, 'F');
+    pdf.setTextColor(90); pdf.setFontSize(8.5);
+    pdf.text(lines, M + 4, y + 6);
+    y += boxH + 5;
+  }
+
+  // ── Mentions légales ──
+  const mentions = isF
+    ? `Conditions de paiement : paiement a 30 jours. Echeance : ${dfr(doc.echeance)}. ${e.iban ? 'IBAN : ' + e.iban + '. ' : ''}En cas de retard, penalite de 3x le taux d'interet legal + indemnite forfaitaire de 40 EUR pour frais de recouvrement (art. L.441-10 C. com.). TVA ${tv}%${tv === 0 ? ' — TVA non applicable, art. 293 B du CGI' : ''}.`
+    : `Validite du devis : ${dfr(doc.validite)}. Devis gratuit. Les travaux ne debuteront qu'apres acceptation du present devis.`;
+  const mLines = pdf.splitTextToSize(mentions, PW - 2 * M - 8);
+  const mH = mLines.length * 3.6 + 8;
+  ensure(mH + 4);
+  pdf.setFillColor(245, 245, 242); pdf.roundedRect(M, y, PW - 2 * M, mH, 2, 2, 'F');
+  pdf.setTextColor(120); pdf.setFontSize(7.5);
+  pdf.text(mLines, M + 4, y + 5.5);
+  y += mH + 6;
+
+  // ── Signature ──
+  if (signature) {
+    ensure(30);
+    const sigW = 45, sigH = 20, sx = PW - M - sigW;
+    pdf.setFontSize(8); pdf.setTextColor(110);
+    pdf.text('Bon pour accord — signe electroniquement', PW - M, y, { align: 'right' });
+    try { pdf.addImage(signature, 'JPEG', sx, y + 2, sigW, sigH); } catch (err) { console.warn('addImage signature:', err); }
+    pdf.setDrawColor(180); pdf.line(sx, y + sigH + 3, PW - M, y + sigH + 3);
+  }
+
+  const base64 = pdf.output('datauristring').split(',')[1];
+  const filename = `${isF ? 'Facture' : 'Devis'}-${doc.id}.pdf`;
+  return { content: base64, filename };
 }
 
 function defaultMessage(type, doc, client, entreprise) {
@@ -1446,7 +1516,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b14</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b15</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
