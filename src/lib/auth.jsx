@@ -29,6 +29,18 @@ export function AuthProvider({ children }) {
 
     async function init() {
       try {
+        // Restaure la session après un aller-retour Stripe (persistSession:false)
+        const stash = sessionStorage.getItem('sb-checkout-session')
+        if (stash) {
+          sessionStorage.removeItem('sb-checkout-session')
+          try {
+            const { access_token, refresh_token } = JSON.parse(stash)
+            if (access_token && refresh_token) {
+              await supabase.auth.setSession({ access_token, refresh_token })
+            }
+          } catch (e) { console.error('Restauration session échouée:', e) }
+        }
+
         const { data: { session } } = await supabase.auth.getSession()
         if (!mounted) return
 

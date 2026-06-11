@@ -1346,6 +1346,15 @@ export default function FactuPro() {
     }
   }, []);
 
+  // Sauvegarde la session avant de quitter l'app vers Stripe (persistSession:false
+  // => sans ça, le retour recharge la page et déconnecte l'utilisateur).
+  const stashSession = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) sessionStorage.setItem("sb-checkout-session", JSON.stringify({
+      access_token: session.access_token, refresh_token: session.refresh_token,
+    }));
+  };
+
   // Lance le checkout Stripe (abonnement Pro)
   const startCheckout = async () => {
     try {
@@ -1355,7 +1364,7 @@ export default function FactuPro() {
       });
       if (error) throw new Error(error?.context?.json?.error || error.message);
       if (data?.error) throw new Error(data.error);
-      if (data?.url) window.location.href = data.url;
+      if (data?.url) { await stashSession(); window.location.href = data.url; }
     } catch (e) { fl("Erreur paiement : " + e.message); }
   };
 
@@ -1367,7 +1376,7 @@ export default function FactuPro() {
       });
       if (error) throw new Error(error?.context?.json?.error || error.message);
       if (data?.error) throw new Error(data.error);
-      if (data?.url) window.location.href = data.url;
+      if (data?.url) { await stashSession(); window.location.href = data.url; }
     } catch (e) { fl("Erreur : " + e.message); }
   };
 
@@ -1392,7 +1401,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b9</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b10</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
