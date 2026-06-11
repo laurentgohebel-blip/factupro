@@ -64,15 +64,25 @@ serve(async (req) => {
 async function upsertSub(entrepriseId: string, sub: Stripe.Subscription, customerId: string) {
   const isDeleted = sub.status === "canceled" || sub.status === "unpaid";
   const plan = !isDeleted && PRO_STATUSES.includes(sub.status) ? "pro" : "free";
-  await admin.from("subscriptions").upsert({
+
+  // current_period_end : sur l'objet subscription (anciennes API) OU sur le
+  // premier item (API Stripe récentes). On calcule sans jamais planter.
+  const cpeUnix = (sub as any).current_period_end
+    ?? (sub as any).items?.data?.[0]?.current_period_end
+    ?? null;
+  let periodEnd: string | null = null;
+  if (cpeUnix) { const d = new Date(cpeUnix * 1000); if (!isNaN(d.getTime())) periodEnd = d.toISOString(); }
+
+  const { error } = await admin.from("subscriptions").upsert({
     entreprise_id: entrepriseId,
     plan,
     status: sub.status,
     stripe_customer_id: customerId,
     stripe_subscription_id: sub.id,
-    current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+    current_period_end: periodEnd,
     updated_at: new Date().toISOString(),
   }, { onConflict: "entreprise_id" });
+  if (error) throw error;
 }
 
 async function entrepriseIdFromCustomer(customerId: string): Promise<string | null> {
