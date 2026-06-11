@@ -56,11 +56,14 @@ export function AuthProvider({ children }) {
 
     init()
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    // ⚠️ Ne PAS await d'appels Supabase ici : le callback tient un verrou
+    // (navigator.locks) et un appel DB à l'intérieur provoque un deadlock
+    // (splash de chargement infini). On diffère loadEntreprise hors du verrou.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return
       if (session?.user) {
         setUser(session.user)
-        await loadEntreprise(session.user.id)
+        setTimeout(() => { if (mounted) loadEntreprise(session.user.id) }, 0)
       } else {
         setUser(null)
         setEntreprise(null)
