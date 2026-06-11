@@ -77,32 +77,20 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function signUp(email, password, entrepriseData) {
-    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password })
+    // L'entreprise (+ catalogue + abonnement free) est créée côté serveur par
+    // le trigger handle_new_user sur auth.users (SECURITY DEFINER, bypass RLS).
+    // On transmet le nom/SIRET via les métadonnées d'inscription.
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { nom: entrepriseData.nom, siret: entrepriseData.siret || '' } },
+    })
     if (authError) throw authError
 
-    if (authData.user) {
-      const { data: ent, error: entError } = await supabase
-        .from('entreprises')
-        .insert({
-          user_id: authData.user.id,
-          nom: entrepriseData.nom,
-          siret: entrepriseData.siret || '',
-          adresse: entrepriseData.adresse || '',
-          tel: entrepriseData.tel || '',
-          email: email,
-        })
-        .select()
-        .single()
-      if (entError) throw entError
-
-      await supabase.from('catalogue').insert([
-        { entreprise_id: ent.id, categorie: 'Déplacement', description: 'Déplacement zone locale', unite: 'forfait', prix_unitaire: 45 },
-        { entreprise_id: ent.id, categorie: 'Déplacement', description: 'Déplacement hors zone', unite: 'forfait', prix_unitaire: 75 },
-        { entreprise_id: ent.id, categorie: "Main d'œuvre", description: "Main d'œuvre qualifiée", unite: 'heure', prix_unitaire: 55 },
-        { entreprise_id: ent.id, categorie: "Main d'œuvre", description: "Main d'œuvre apprenti", unite: 'heure', prix_unitaire: 30 },
-      ])
-
-      setEntreprise(ent)
+    // Si la confirmation d'email est désactivée, une session est déjà active :
+    // on charge l'entreprise créée par le trigger.
+    if (authData.session?.user) {
+      await loadEntreprise(authData.session.user.id)
     }
     return authData
   }
