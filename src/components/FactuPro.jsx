@@ -47,9 +47,28 @@ async function sendEmailViaResend(to, subject, html, replyTo, attachment) {
   return data;
 }
 
+// Pré-charge une image data-URI et la ré-encode en JPEG borné sur fond blanc.
+// Garantit une image valide/décodée et légère (évite le PDF blanc sur mobile
+// quand html2canvas peine sur les gros PNG transparents en data-URI).
+async function shrinkDataUrl(dataUrl, maxW = 360) {
+  if (!dataUrl) return null;
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
+    const nw = img.naturalWidth || maxW, nh = img.naturalHeight || 120;
+    const scale = Math.min(1, maxW / nw);
+    const w = Math.max(1, Math.round(nw * scale)), h = Math.max(1, Math.round(nh * scale));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.92);
+  } catch { return null; }
+}
+
 async function generatePDFAttachment(type, doc, client, entreprise) {
   const { default: html2pdf } = await import('html2pdf.js');
-  const htmlContent = generatePDFHtml(type, doc, client, doc.signature || null, entreprise);
+  const signature = await shrinkDataUrl(doc.signature || null);
+  const htmlContent = generatePDFHtml(type, doc, client, signature, entreprise);
 
   // html2pdf ne sait pas rendre un document complet — on extrait uniquement le <body>
   const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*)<\/body>/i);
@@ -80,7 +99,7 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
       margin: [8, 10],
       filename: 'doc.pdf',
       image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
+      html2canvas: { scale: 2, useCORS: false, allowTaint: true, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     }).from(container).outputPdf('datauristring');
     const base64 = dataUri.split(',')[1];
@@ -1413,7 +1432,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b12</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b13</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
