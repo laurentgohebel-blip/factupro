@@ -59,17 +59,28 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   const styleMatch = htmlContent.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
   const styles = styleMatch.join('');
 
+  // Le document est rendu DANS le viewport (sinon html2canvas ne le peint pas
+  // sur mobile → PDF blanc), mais masqué sous un voile blanc plein écran.
+  // html2canvas capture l'élément ciblé indépendamment de ce qui le recouvre.
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483646;';
   const container = document.createElement('div');
   container.innerHTML = styles + bodyContent;
-  container.style.cssText = 'position:absolute;left:-9999px;top:0;width:794px;background:white;';
+  container.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;z-index:2147483645;';
   document.body.appendChild(container);
-  await new Promise(r => setTimeout(r, 400));
+  document.body.appendChild(overlay);
+
+  // Attendre le chargement des images (ex. signature en data-URI) + le layout
+  const imgs = Array.from(container.querySelectorAll('img'));
+  await Promise.all(imgs.map(img => img.complete ? null : new Promise(res => { img.onload = img.onerror = res; })));
+  await new Promise(r => setTimeout(r, 350));
+
   try {
     const dataUri = await html2pdf().set({
       margin: [8, 10],
       filename: 'doc.pdf',
       image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: false, logging: false, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     }).from(container).outputPdf('datauristring');
     const base64 = dataUri.split(',')[1];
@@ -77,6 +88,7 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
     return { content: base64, filename };
   } finally {
     document.body.removeChild(container);
+    document.body.removeChild(overlay);
   }
 }
 
@@ -1401,7 +1413,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b11</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b12</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
