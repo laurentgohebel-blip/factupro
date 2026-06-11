@@ -728,7 +728,7 @@ function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF
       <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
       <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{devis.id}</h2>
       <Badge statut={devis.statut} />
-      {['en_attente', 'envoye'].includes(devis.statut) && <button className="btn-press" onClick={onRefresh} title="Actualiser" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🔄</button>}
+      {!['accepte', 'refuse', 'facture'].includes(devis.statut) && <button className="btn-press" onClick={onRefresh} title="Actualiser" style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🔄</button>}
     </div>
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Client</div><div style={{ fontWeight: 600, fontSize: 15 }}>{client?.nom}</div><div style={{ fontSize: 12, color: T.textMuted }}>{client?.adresse}</div>
@@ -1249,11 +1249,13 @@ export default function FactuPro() {
     }
   }, [dvs]);
 
-  // Polling auto : tant qu'un devis en attente de signature est ouvert,
-  // on vérifie toutes les 4s si le client l'a signé côté lien public.
+  // Polling auto : tant qu'un devis n'est pas dans un état terminal
+  // (accepté/refusé/facturé), on vérifie toutes les 4s s'il a été signé
+  // côté lien public. Condition permissive : on ne connaît pas forcément
+  // le statut exact "en attente", donc on exclut seulement les états finaux.
   // Requête directe (pas de boucle : déps figées sur dbId + statut).
   useEffect(() => {
-    if (!selD || !['en_attente', 'envoye'].includes(selD.statut)) return;
+    if (!selD || ['accepte', 'refuse', 'facture'].includes(selD.statut)) return;
     const dbId = selD.dbId, curStatut = selD.statut, curSig = selD.signature;
     let stop = false;
     const check = async () => {
