@@ -1329,6 +1329,7 @@ export default function FactuPro() {
           onEmail={() => setEmailModal({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature })}
           onDup={() => { setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
           onConvert={async () => {
+            alert("SONDE Facturer — statut: " + selD.statut + " | _raw.id: " + (selD._raw?.id || "MANQUANT") + " | lignes: " + (selD.lignes?.length ?? "?"));
             try {
               const raw = selD._raw;
               if (!raw || !raw.id) { alert("Bug Facturer : données du devis manquantes (_raw). Rechargez la page (F5) et réessayez."); return; }
