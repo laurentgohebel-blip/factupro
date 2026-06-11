@@ -1249,31 +1249,28 @@ export default function FactuPro() {
     }
   }, [dvs]);
 
-  // Polling auto : tant qu'un devis n'est pas dans un état terminal
-  // (accepté/refusé/facturé), on vérifie toutes les 4s s'il a été signé
-  // côté lien public. Condition permissive : on ne connaît pas forcément
-  // le statut exact "en attente", donc on exclut seulement les états finaux.
-  // Requête directe (pas de boucle : déps figées sur dbId + statut).
+  // Mise à jour live via Supabase Realtime : tant qu'un devis non terminal
+  // est ouvert, on s'abonne aux changements de SA ligne uniquement.
+  // Événementiel (pas d'intervalle) → aucune boucle de re-render possible.
+  // On fusionne juste statut + signature dans le selD courant (on garde les
+  // lignes déjà chargées). Nécessite la réplication activée sur la table devis.
   useEffect(() => {
     if (!selD || ['accepte', 'refuse', 'facture'].includes(selD.statut)) return;
-    const dbId = selD.dbId, curStatut = selD.statut, curSig = selD.signature;
-    let stop = false;
-    const check = async () => {
-      const { data } = await supabase
-        .from('devis')
-        .select('*, devis_lignes(*)')
-        .eq('id', dbId)
-        .single();
-      if (stop || !data) return;
-      if (data.statut !== curStatut || data.signature_url !== curSig) {
-        setSelD(normDevis(data));
-        reloadDevis();
-        if (data.statut === 'accepte') fl('✅ Devis signé par le client !');
-      }
-    };
-    const iv = setInterval(check, 4000);
-    check(); // premier check immédiat à l'ouverture
-    return () => { stop = true; clearInterval(iv); };
+    const dbId = selD.dbId;
+    const ch = supabase
+      .channel(`devis-${dbId}`)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'devis', filter: `id=eq.${dbId}` },
+        (payload) => {
+          const n = payload.new;
+          setSelD(prev => (prev && prev.dbId === dbId)
+            ? { ...prev, statut: n.statut, signature: n.signature_url }
+            : prev);
+          if (n.statut === 'accepte') fl('✅ Devis signé par le client !');
+          else if (n.statut === 'refuse') fl('❌ Devis refusé par le client');
+        })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
   }, [selD?.dbId, selD?.statut]);
 
   return (
