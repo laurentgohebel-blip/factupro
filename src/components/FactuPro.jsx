@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
-import { useClients, useDevis, useFactures, useCatalogue } from '../lib/data';
+import { useClients, useDevis, useFactures, useCatalogue, useSubscription } from '../lib/data';
 import { supabase } from '../lib/supabase';
 
 /* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
@@ -1067,7 +1067,7 @@ function openPrintablePDF(type, doc, client, signature, entreprise) {
 }
 
 /* ══════════════ PROFIL ENTREPRISE ══════════════ */
-function ProfilPage({ entreprise, onSave, onSignOut }) {
+function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage }) {
   const [f, setF] = useState({
     nom: entreprise?.nom || "", siret: entreprise?.siret || "", adresse: entreprise?.adresse || "",
     tel: entreprise?.tel || "", email: entreprise?.email || "", ape: entreprise?.ape || "", tva_intra: entreprise?.tva_intra || "", iban: entreprise?.iban || "",
@@ -1096,6 +1096,34 @@ function ProfilPage({ entreprise, onSave, onSignOut }) {
       <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 8 }}>Ces informations apparaissent sur</div>
       <div style={{ fontSize: 13, color: T.text, lineHeight: 1.8 }}>📄 Vos devis PDF<br/>🧾 Vos factures PDF</div>
     </div>
+
+    {/* ── Abonnement ── */}
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14, marginTop: 22 }}>Abonnement</div>
+    <div className="fade-up" style={{ background: isPro ? `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})` : T.bgCard, color: isPro ? "#fff" : T.text, borderRadius: T.radius, padding: 18, boxShadow: T.shadow, marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>{isPro ? "⭐ FactuPro Pro" : "Formule Gratuite"}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 20, background: isPro ? "rgba(255,255,255,0.2)" : T.primaryPale, color: isPro ? "#fff" : T.primary }}>{isPro ? "Actif" : "Free"}</div>
+      </div>
+      {isPro ? (
+        <>
+          <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.7, marginBottom: 4 }}>Devis & factures illimités · sans mention FactuPro</div>
+          {subscription?.status === "past_due" && <div style={{ fontSize: 12, background: "rgba(255,255,255,0.18)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>⚠️ Paiement en attente — mettez à jour votre moyen de paiement.</div>}
+          {subscription?.current_period_end && <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 12 }}>Prochain renouvellement : {dfr(subscription.current_period_end)}</div>}
+          <button className="btn-press" onClick={onManage} style={{ width: "100%", padding: 13, borderRadius: T.radiusSm, border: "1.5px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.12)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>Gérer mon abonnement</button>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.8, marginBottom: 14 }}>
+            Passez à <strong style={{ color: T.primary }}>Pro pour 9 €/mois</strong> :<br/>
+            ✓ Devis & factures illimités<br/>
+            ✓ Suppression de la mention « FactuPro »<br/>
+            ✓ Support prioritaire
+          </div>
+          <button className="btn-press" onClick={onUpgrade} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>⭐ Passer à Pro</button>
+        </>
+      )}
+    </div>
+
     <button className="btn-press" onClick={onSignOut} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "1.5px solid #FECACA", background: T.dangerPale, color: "#991B1B", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Déconnexion</button>
   </div>;
 }
@@ -1214,6 +1242,7 @@ export default function FactuPro() {
   const { devis: rawDevis, addDevis, updateDevis, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
   const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
+  const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
 
   // Normalize data for UI — useMemo évite de recréer les tableaux à chaque render
   const cls = useMemo(() => rawClients.map(normClient), [rawClients]);
@@ -1273,6 +1302,50 @@ export default function FactuPro() {
     return () => { supabase.removeChannel(ch); };
   }, [selD?.dbId, selD?.statut]);
 
+  // Retour depuis Stripe Checkout (?checkout=success|cancel)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const co = params.get("checkout");
+    if (!co) return;
+    window.history.replaceState({}, "", "/app");
+    if (co === "success") {
+      fl("Paiement confirmé, activation en cours…");
+      // Le webhook met à jour la base ; on recharge quelques fois le temps qu'il arrive
+      let n = 0;
+      const iv = setInterval(async () => {
+        await reloadSub();
+        if (++n >= 5) clearInterval(iv);
+      }, 1500);
+    } else {
+      fl("Paiement annulé");
+    }
+  }, []);
+
+  // Lance le checkout Stripe (abonnement Pro)
+  const startCheckout = async () => {
+    try {
+      fl("Redirection vers le paiement…");
+      const { data, error } = await supabase.functions.invoke("create-checkout-session", {
+        body: { origin: window.location.origin },
+      });
+      if (error) throw new Error(error?.context?.json?.error || error.message);
+      if (data?.error) throw new Error(data.error);
+      if (data?.url) window.location.href = data.url;
+    } catch (e) { fl("Erreur paiement : " + e.message); }
+  };
+
+  // Ouvre le portail de gestion d'abonnement Stripe
+  const openPortal = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("customer-portal", {
+        body: { origin: window.location.origin },
+      });
+      if (error) throw new Error(error?.context?.json?.error || error.message);
+      if (data?.error) throw new Error(data.error);
+      if (data?.url) window.location.href = data.url;
+    } catch (e) { fl("Erreur : " + e.message); }
+  };
+
   return (
     <div style={{ fontFamily: T.font, background: T.bg, color: T.text, minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto", position: "relative" }}>
       <style>{CSS}</style>
@@ -1294,7 +1367,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b7</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b8</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1441,7 +1514,7 @@ export default function FactuPro() {
           onExportDevis={() => { exportDevisCSV(dvs, cls); fl("Export devis téléchargé ✓"); }}
         />}
 
-        {pg === "profil" && <ProfilPage entreprise={entreprise} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
       </div>
 
       {/* Nav */}

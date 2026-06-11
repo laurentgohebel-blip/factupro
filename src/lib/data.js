@@ -182,6 +182,30 @@ export function useDevis(entrepriseId) {
   return { devis, loading, addDevis, updateDevis, deleteDevis, signerDevis, reload: load }
 }
 
+// ─── Abonnement (Stripe) ───
+export function useSubscription(entrepriseId) {
+  const [subscription, setSubscription] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    if (!entrepriseId) return
+    const { data } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('entreprise_id', entrepriseId)
+      .single()
+    setSubscription(data || { plan: 'free' })
+    setLoading(false)
+  }, [entrepriseId])
+
+  useEffect(() => { load() }, [load])
+
+  const plan = subscription?.plan || 'free'
+  const isPro = plan === 'pro'
+
+  return { subscription, plan, isPro, loading, reload: load }
+}
+
 // ─── Factures ───
 export function useFactures(entrepriseId) {
   const [factures, setFactures] = useState([])
