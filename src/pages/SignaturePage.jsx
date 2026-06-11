@@ -121,7 +121,7 @@ export default function SignaturePage() {
   async function handleRefuse() {
     if (!confirm('Êtes-vous sûr de vouloir refuser ce devis ?')) return
     try {
-      await fetch(
+      const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/save-signature-public`,
         {
           method: 'POST',
@@ -129,6 +129,8 @@ export default function SignaturePage() {
           body: JSON.stringify({ devisId, signatureDataUrl: null, statut: 'refuse' }),
         }
       )
+      const json = await res.json()
+      if (json.error) throw new Error(json.error)
       setRefused(true)
     } catch (e) { alert('Erreur : ' + e.message) }
   }
