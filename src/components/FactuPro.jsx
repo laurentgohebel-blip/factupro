@@ -1067,7 +1067,7 @@ function openPrintablePDF(type, doc, client, signature, entreprise) {
 }
 
 /* ══════════════ PROFIL ENTREPRISE ══════════════ */
-function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage }) {
+function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5 }) {
   const [f, setF] = useState({
     nom: entreprise?.nom || "", siret: entreprise?.siret || "", adresse: entreprise?.adresse || "",
     tel: entreprise?.tel || "", email: entreprise?.email || "", ape: entreprise?.ape || "", tva_intra: entreprise?.tva_intra || "", iban: entreprise?.iban || "",
@@ -1106,7 +1106,7 @@ function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, 
       </div>
       {isPro ? (
         <>
-          <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.7, marginBottom: 4 }}>Devis & factures illimités · sans mention FactuPro</div>
+          <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.7, marginBottom: 4 }}>Devis & factures illimités · support prioritaire</div>
           {subscription?.status === "past_due" && <div style={{ fontSize: 12, background: "rgba(255,255,255,0.18)", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>⚠️ Paiement en attente — mettez à jour votre moyen de paiement.</div>}
           {subscription?.current_period_end && <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 12 }}>Prochain renouvellement : {dfr(subscription.current_period_end)}</div>}
           <button className="btn-press" onClick={onManage} style={{ width: "100%", padding: 13, borderRadius: T.radiusSm, border: "1.5px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.12)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>Gérer mon abonnement</button>
@@ -1114,10 +1114,18 @@ function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, 
       ) : (
         <>
           <div style={{ fontSize: 13, color: T.textMuted, lineHeight: 1.8, marginBottom: 14 }}>
+            La formule Gratuite est limitée à <strong>{freeLimit} devis et {freeLimit} factures par mois</strong>.<br/><br/>
             Passez à <strong style={{ color: T.primary }}>Pro pour 9 €/mois</strong> :<br/>
             ✓ Devis & factures illimités<br/>
-            ✓ Suppression de la mention « FactuPro »<br/>
             ✓ Support prioritaire
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {[["Devis", devisMois], ["Factures", facturesMois]].map(([l, n]) => (
+              <div key={l} style={{ flex: 1, background: T.bgElevated, borderRadius: T.radiusXs, padding: "8px 10px", textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: T.textMuted }}>{l} ce mois</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: n >= freeLimit ? T.danger : T.primary }}>{n}/{freeLimit}</div>
+              </div>
+            ))}
           </div>
           <button className="btn-press" onClick={onUpgrade} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>⭐ Passer à Pro</button>
         </>
@@ -1269,6 +1277,23 @@ export default function FactuPro() {
   const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
+  // ── Quota formule Gratuite : 5 devis + 5 factures / mois (illimité en Pro) ──
+  const FREE_LIMIT = 5;
+  const _now = new Date();
+  const sameMonth = ds => { if (!ds) return false; const d = new Date(ds); return d.getMonth() === _now.getMonth() && d.getFullYear() === _now.getFullYear(); };
+  const devisMois = dvs.filter(d => sameMonth(d.date)).length;
+  const facturesMois = fcs.filter(f => sameMonth(f.date)).length;
+  const goNewDevis = () => {
+    if (!isPro && devisMois >= FREE_LIMIT) { setConf({ m: `Limite atteinte : ${FREE_LIMIT} devis ce mois-ci en formule Gratuite. Passez à Pro pour un usage illimité.`, fn: () => nav("profil") }); return; }
+    nav("nouveau_devis");
+  };
+  const goNewFacture = () => {
+    if (!isPro && facturesMois >= FREE_LIMIT) { setConf({ m: `Limite atteinte : ${FREE_LIMIT} factures ce mois-ci en formule Gratuite. Passez à Pro pour un usage illimité.`, fn: () => nav("profil") }); return; }
+    nav("nouvelle_facture");
+  };
+  // Routage avec garde-quota (utilisé par le dashboard)
+  const navGuarded = p => p === "nouveau_devis" ? goNewDevis() : p === "nouvelle_facture" ? goNewFacture() : nav(p);
+
   // Sync selD quand rawDevis est rechargé (après reloadDevis)
   useEffect(() => {
     if (!selD) return;
@@ -1367,7 +1392,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b8</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b9</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1378,7 +1403,7 @@ export default function FactuPro() {
 
       {/* Content */}
       <div style={{ flex: 1, padding: "14px 14px 90px", overflowY: "auto" }}>
-        {pg === "dashboard" && <Dashboard devis={dvs} factures={fcs} clients={cls} onNav={nav}
+        {pg === "dashboard" && <Dashboard devis={dvs} factures={fcs} clients={cls} onNav={navGuarded}
           onSelectDevis={d => { setSelD(d); setPg("devis"); }}
           onSelectFacture={f => { setSelF(f); setPg("factures"); }}
         />}
@@ -1394,13 +1419,13 @@ export default function FactuPro() {
             } catch (e) { fl("Erreur: " + e.message); }
           }} />}
 
-        {pg === "devis" && !selD && <DevisList devis={dvs} clients={cls} onSelect={d => setSelD(d)} onNew={() => nav("nouveau_devis")} />}
+        {pg === "devis" && !selD && <DevisList devis={dvs} clients={cls} onSelect={d => setSelD(d)} onNew={goNewDevis} />}
         {pg === "devis" && selD && <DevisDetail devis={selD} client={cls.find(c => c.id === selD.clientId)}
           onBack={() => { setSelD(null); reloadDevis(); }}
           onSign={() => setShowSig(true)}
           onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
           onEmail={() => setEmailModal({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature })}
-          onDup={() => { setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
+          onDup={() => { if (!isPro && devisMois >= FREE_LIMIT) { setConf({ m: `Limite atteinte : ${FREE_LIMIT} devis ce mois-ci en formule Gratuite. Passez à Pro pour un usage illimité.`, fn: () => nav("profil") }); return; } setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
           onConvert={async () => {
             fl("Création de la facture…");
             try {
@@ -1486,7 +1511,7 @@ export default function FactuPro() {
           onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
           onEmail={f => setEmailModal({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null })}
           onPay={id => setPayPick(id)}
-          onNew={() => nav("nouvelle_facture")}
+          onNew={goNewFacture}
         />}
         {pg === "factures" && selF && <FactureDetail
           facture={selF}
@@ -1514,7 +1539,7 @@ export default function FactuPro() {
           onExportDevis={() => { exportDevisCSV(dvs, cls); fl("Export devis téléchargé ✓"); }}
         />}
 
-        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} devisMois={devisMois} facturesMois={facturesMois} freeLimit={FREE_LIMIT} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
       </div>
 
       {/* Nav */}
