@@ -67,8 +67,11 @@ async function shrinkDataUrl(dataUrl, maxW = 360) {
 
 async function generatePDFAttachment(type, doc, client, entreprise) {
   const { default: html2pdf } = await import('html2pdf.js');
+  // ⚠️ On ne passe PAS la signature au HTML : html2canvas plante sur les
+  // images data-URI (PDF blanc). On rend le document sans image, puis on
+  // tamponne la signature directement via jsPDF (addImage gère les data-URI).
   const signature = await shrinkDataUrl(doc.signature || null);
-  const htmlContent = generatePDFHtml(type, doc, client, signature, entreprise);
+  const htmlContent = generatePDFHtml(type, doc, client, null, entreprise);
 
   // html2pdf ne sait pas rendre un document complet — on extrait uniquement le <body>
   const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*)<\/body>/i);
@@ -80,7 +83,6 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
 
   // Le document est rendu DANS le viewport (sinon html2canvas ne le peint pas
   // sur mobile → PDF blanc), mais masqué sous un voile blanc plein écran.
-  // html2canvas capture l'élément ciblé indépendamment de ce qui le recouvre.
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483646;';
   const container = document.createElement('div');
@@ -88,20 +90,32 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   container.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;z-index:2147483645;';
   document.body.appendChild(container);
   document.body.appendChild(overlay);
-
-  // Attendre le chargement des images (ex. signature en data-URI) + le layout
-  const imgs = Array.from(container.querySelectorAll('img'));
-  await Promise.all(imgs.map(img => img.complete ? null : new Promise(res => { img.onload = img.onerror = res; })));
-  await new Promise(r => setTimeout(r, 350));
+  await new Promise(r => setTimeout(r, 250));
 
   try {
-    const dataUri = await html2pdf().set({
+    const worker = html2pdf().set({
       margin: [8, 10],
       filename: 'doc.pdf',
       image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: false, allowTaint: true, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
+      html2canvas: { scale: 2, useCORS: false, logging: false, backgroundColor: '#ffffff', windowWidth: 794, width: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    }).from(container).outputPdf('datauristring');
+    }).from(container).toPdf();
+
+    const pdf = await worker.get('pdf');
+
+    // Tampon de la signature sur la dernière page (jsPDF, fiable pour les data-URI)
+    if (signature) {
+      const pages = pdf.internal.getNumberOfPages();
+      pdf.setPage(pages);
+      const pw = pdf.internal.pageSize.getWidth();
+      const ph = pdf.internal.pageSize.getHeight();
+      const sigW = 45, sigH = 20, x = pw - sigW - 12, y = ph - sigH - 16;
+      pdf.setFontSize(8); pdf.setTextColor(100);
+      pdf.text("Bon pour accord — signé électroniquement", x + sigW, y - 2, { align: "right" });
+      try { pdf.addImage(signature, "JPEG", x, y, sigW, sigH); } catch (e) { console.warn("addImage signature:", e); }
+    }
+
+    const dataUri = pdf.output('datauristring');
     const base64 = dataUri.split(',')[1];
     const filename = `${type === 'facture' ? 'Facture' : 'Devis'}-${doc.id}.pdf`;
     return { content: base64, filename };
@@ -1432,7 +1446,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b13</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b14</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
