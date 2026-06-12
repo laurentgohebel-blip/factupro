@@ -1,0 +1,15 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/assets/*", "*.svg", "*.png", "*.js", "*.css", "*.ico", "*.webmanifest", "*.json"]
+  },
+  "routes": [
+    { "route": "/app", "rewrite": "/index.html" },
+    { "route": "/login", "rewrite": "/index.html" },
+    { "route": "/sign/*", "rewrite": "/index.html" }
+  ],
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  }
+}
