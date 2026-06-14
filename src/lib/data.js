@@ -207,6 +207,47 @@ export function useSubscription(entrepriseId) {
   return { subscription, plan, isPro, loading, reload: load }
 }
 
+// ─── Clôtures annuelles (archivage) ───
+export function useClotures(entrepriseId) {
+  const [clotures, setClotures] = useState([])
+
+  const load = useCallback(async () => {
+    if (!entrepriseId) return
+    const { data } = await supabase
+      .from('clotures')
+      .select('*')
+      .eq('entreprise_id', entrepriseId)
+      .order('annee', { ascending: false })
+    setClotures(data || [])
+  }, [entrepriseId])
+
+  useEffect(() => { load() }, [load])
+
+  async function creerCloture(annee) {
+    const { data, error } = await supabase.rpc('creer_cloture_annuelle', {
+      p_entreprise_id: entrepriseId, p_annee: annee,
+    })
+    if (error) throw error
+    await load()
+    return data
+  }
+
+  return { clotures, creerCloture, reload: load }
+}
+
+// Exporte toutes les données de l'entreprise (portabilité RGPD + archive).
+// La RLS restreint chaque table aux données du propriétaire.
+export async function collectExportData() {
+  const tables = ['entreprises', 'clients', 'catalogue', 'devis', 'devis_lignes',
+    'factures', 'facture_lignes', 'relances', 'audit_log', 'clotures', 'subscriptions']
+  const out = { exporte_le: new Date().toISOString() }
+  for (const t of tables) {
+    const { data } = await supabase.from(t).select('*')
+    out[t] = data || []
+  }
+  return out
+}
+
 // ─── Journal d'audit (lecture seule) ───
 export function useAudit(entrepriseId) {
   const [entries, setEntries] = useState([])

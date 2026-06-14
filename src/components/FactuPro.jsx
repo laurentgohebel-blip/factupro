@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
-import { useClients, useDevis, useFactures, useCatalogue, useSubscription, useAudit } from '../lib/data';
+import { useClients, useDevis, useFactures, useCatalogue, useSubscription, useAudit, useClotures, collectExportData } from '../lib/data';
 import { supabase } from '../lib/supabase';
 
 /* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
@@ -1242,7 +1242,10 @@ function openPrintablePDF(type, doc, client, signature, entreprise) {
 }
 
 /* ══════════════ PROFIL ENTREPRISE ══════════════ */
-function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5, audit = [] }) {
+function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5, audit = [], clotures = [], onCloture, onExport }) {
+  const anneeCourante = new Date().getFullYear();
+  const anneePrec = anneeCourante - 1;
+  const dejaCloture = (a) => clotures.some(c => c.annee === a);
   const [f, setF] = useState({
     nom: entreprise?.nom || "", siret: entreprise?.siret || "", adresse: entreprise?.adresse || "",
     tel: entreprise?.tel || "", email: entreprise?.email || "", ape: entreprise?.ape || "", tva_intra: entreprise?.tva_intra || "", iban: entreprise?.iban || "",
@@ -1319,6 +1322,28 @@ function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, 
             <span style={{ fontSize: 10, color: T.textLight, whiteSpace: "nowrap" }}>{new Date(a.created_at).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
           </div>
         ))}
+    </div>
+
+    {/* ── Archivage & données (conformité) ── */}
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14, marginTop: 22 }}>Archivage & données</div>
+    <div className="fade-up" style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 12 }}>Clôtures annuelles : fige les totaux d'une année et les chaîne par signature (intégrité légale). Une clôture est définitive.</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {[anneePrec, anneeCourante].map(a => (
+          <button key={a} className="btn-press" disabled={dejaCloture(a)} onClick={() => onCloture?.(a)}
+            style={{ flex: 1, minWidth: 120, padding: 11, borderRadius: T.radiusSm, border: `1px solid ${T.border}`, background: dejaCloture(a) ? T.bgElevated : T.bgCard, color: dejaCloture(a) ? T.textLight : T.text, fontSize: 13, fontWeight: 600, cursor: dejaCloture(a) ? "default" : "pointer", fontFamily: T.font }}>
+            {dejaCloture(a) ? `✓ ${a} clôturée` : `🔒 Clôturer ${a}`}
+          </button>
+        ))}
+      </div>
+      {clotures.length > 0 && clotures.map(c => (
+        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${T.borderLight}` }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Clôture {c.annee}</span>
+          <span style={{ fontSize: 11, color: T.textMuted }}>{fmt(parseFloat(c.total_ttc))} TTC · {c.nb_factures} fact.</span>
+        </div>
+      ))}
+      <button className="btn-press" onClick={onExport} style={{ width: "100%", marginTop: 14, padding: 12, borderRadius: T.radiusSm, border: `1px solid ${T.border}`, background: T.bgElevated, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📦 Exporter toutes mes données (JSON)</button>
+      <div style={{ fontSize: 10, color: T.textLight, marginTop: 8, lineHeight: 1.5 }}>Vos données sont conservées et exportables (portabilité RGPD). Les factures sont conservées 10 ans (obligation légale).</div>
     </div>
 
     <button className="btn-press" onClick={onSignOut} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "1.5px solid #FECACA", background: T.dangerPale, color: "#991B1B", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Déconnexion</button>
@@ -1443,6 +1468,7 @@ export default function FactuPro() {
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
   const { entries: auditEntries } = useAudit(entreprise?.id);
+  const { clotures, creerCloture } = useClotures(entreprise?.id);
 
   // Normalize data for UI — useMemo évite de recréer les tableaux à chaque render
   const cls = useMemo(() => rawClients.map(normClient), [rawClients]);
@@ -1616,7 +1642,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b25</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b26</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1759,7 +1785,20 @@ export default function FactuPro() {
           onExportDevis={() => { exportDevisCSV(dvs, cls); fl("Export devis téléchargé ✓"); }}
         />}
 
-        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} devisMois={devisMois} facturesMois={facturesMois} freeLimit={FREE_LIMIT} audit={auditEntries} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} devisMois={devisMois} facturesMois={facturesMois} freeLimit={FREE_LIMIT} audit={auditEntries} clotures={clotures}
+          onCloture={(annee) => setConf({ m: `Clôturer l'année ${annee} ? Les totaux seront figés définitivement.`, fn: async () => { try { await creerCloture(annee); fl("Année clôturée ✓"); } catch (e) { fl("Erreur: " + e.message); } } })}
+          onExport={async () => {
+            try {
+              fl("Préparation de l'export…");
+              const data = await collectExportData();
+              const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a"); a.href = url; a.download = `factupro-export-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+              URL.revokeObjectURL(url);
+              fl("Export téléchargé ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+          onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
       </div>
 
       {/* Nav */}
