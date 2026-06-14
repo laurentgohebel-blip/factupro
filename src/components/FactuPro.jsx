@@ -978,6 +978,42 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir
   </div>;
 }
 
+function AvoirModal({ facture, onClose, onConfirm }) {
+  const ht = tl(facture.lignes), tv = facture.tva || 10, totTtc = ht * (1 + tv / 100);
+  const [mode, setMode] = useState("total"); // total | custom
+  const [montant, setMontant] = useState(ht.toFixed(2));
+  const [motif, setMotif] = useState("");
+  const [saving, setSaving] = useState(false);
+  const iS = { width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center", animation: "fadeIn .2s" }} onClick={onClose}>
+      <div style={{ background: T.bgCard, borderRadius: "20px 20px 0 0", padding: 22, width: "100%", maxWidth: 480, animation: "slideUp .25s" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h3 style={{ fontSize: 17, fontWeight: 700 }}>↩ Créer un avoir</h3>
+          <button onClick={onClose} style={{ background: T.bgElevated, border: "none", cursor: "pointer", color: T.textMuted, width: 32, height: 32, borderRadius: "50%", fontSize: 16 }}>×</button>
+        </div>
+        <div style={{ background: T.bgElevated, borderRadius: T.radiusSm, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: T.textMuted }}>
+          Facture {facture.id} · HT {fmt(ht)} · TTC {fmt(totTtc)}
+        </div>
+        <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Type d'avoir</label>
+          <Chips opts={[{ v: "total", l: "Avoir total" }, { v: "custom", l: "Montant personnalisé" }]} val={mode} set={setMode} />
+        </div>
+        {mode === "custom" && <>
+          <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Montant à créditer (€ HT)</label><input style={iS} type="number" value={montant} onChange={e => setMontant(e.target.value)} /></div>
+          <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Motif</label><input style={iS} value={motif} onChange={e => setMotif(e.target.value)} placeholder="ex: Remise commerciale, annulation partielle..." /></div>
+        </>}
+        <button className="btn-press" disabled={saving} onClick={async () => {
+          setSaving(true);
+          try { await onConfirm(mode === "custom" ? { montant: parseFloat(montant) || 0, motif } : null); }
+          finally { setSaving(false); }
+        }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font }}>
+          {saving ? "Création..." : "Créer l'avoir"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNew }) {
   const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
   const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
@@ -1427,6 +1463,7 @@ export default function FactuPro() {
   const [toast, setToast] = useState(null);
   const [payPick, setPayPick] = useState(null);
   const [emailModal, setEmailModal] = useState(null); // { type, doc, client, signature }
+  const [avoirModal, setAvoirModal] = useState(null); // facture sélectionnée pour avoir
 
   const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
   const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
@@ -1561,12 +1598,25 @@ export default function FactuPro() {
         setPayPick(null); fl("Paiement enregistré ✓");
       }} />}
 
+      {avoirModal && <AvoirModal facture={avoirModal} onClose={() => setAvoirModal(null)} onConfirm={async (custom) => {
+        try {
+          const orig = avoirModal._raw;
+          const av = await creerAvoir(orig, custom);
+          const lignes = custom
+            ? [{ description: custom.motif || "Avoir", quantite: 1, unite: "forfait", prix_unitaire: -Math.abs(custom.montant || 0) }]
+            : (orig.facture_lignes || []).map(l => ({ ...l, prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)) }));
+          setAvoirModal(null);
+          setSelF(normFacture({ ...av, facture_lignes: lignes }));
+          fl("Avoir créé ✓");
+        } catch (e) { setAvoirModal(null); fl("Erreur: " + e.message); }
+      }} />}
+
       {/* Header */}
       <div className="gradient-header" style={{ color: "#fff", padding: "18px 20px 16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b24</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b25</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1694,13 +1744,7 @@ export default function FactuPro() {
           onPDF={() => setPdf({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null, entreprise })}
           onEmail={() => setEmailModal({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null })}
           onPay={id => setPayPick(id)}
-          onAvoir={() => setConf({ m: `Créer un avoir pour annuler/corriger ${selF.id} ? Cette opération est définitive.`, fn: async () => {
-            try {
-              const av = await creerAvoir(selF._raw);
-              setSelF(normFacture({ ...av, facture_lignes: (selF._raw.facture_lignes || []).map(l => ({ ...l, prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)) })) }));
-              fl("Avoir créé ✓");
-            } catch (e) { fl("Erreur: " + e.message); }
-          }})}
+          onAvoir={() => setAvoirModal(selF)}
         />}
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}

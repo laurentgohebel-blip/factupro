@@ -291,7 +291,9 @@ export function useFactures(entrepriseId) {
   }
 
   // Crée un avoir (note de crédit) sur une facture : montants négatifs.
-  async function creerAvoir(facture) {
+  // custom = { montant, motif } => avoir partiel d'une seule ligne ;
+  // sinon => avoir total (copie des lignes de la facture, négativées).
+  async function creerAvoir(facture, custom) {
     const { data: numData } = await supabase.rpc('prochain_numero', {
       p_entreprise_id: entrepriseId,
       p_type: 'avoir'
@@ -316,10 +318,16 @@ export function useFactures(entrepriseId) {
       .single()
     if (error) throw error
 
-    const lignes = facture.facture_lignes || []
-    if (lignes.length) {
-      await supabase.from('facture_lignes').insert(
-        lignes.map((l, i) => ({
+    const lignes = (custom && custom.montant != null)
+      ? [{
+          facture_id: data.id,
+          description: custom.motif || 'Avoir',
+          quantite: 1,
+          unite: 'forfait',
+          prix_unitaire: -Math.abs(parseFloat(custom.montant) || 0),
+          ordre: 0,
+        }]
+      : (facture.facture_lignes || []).map((l, i) => ({
           facture_id: data.id,
           description: l.description,
           quantite: l.quantite,
@@ -327,8 +335,8 @@ export function useFactures(entrepriseId) {
           prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)),
           ordre: i,
         }))
-      )
-    }
+
+    if (lignes.length) await supabase.from('facture_lignes').insert(lignes)
 
     await load()
     return data
