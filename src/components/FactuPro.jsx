@@ -969,8 +969,8 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onDelet
       {facture.statut !== "payee" && <button className="btn-press" onClick={() => onPay(facture.dbId)} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰 Marquer payée</button>}
       <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
       <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
-      <button className="btn-press" onClick={onDelete} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>🗑</button>
     </div>
+    <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>🔒 Facture émise — inaltérable. Pour corriger, créez un avoir.</div>
   </div>;
 }
 
@@ -1562,7 +1562,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b22</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b23</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1690,11 +1690,6 @@ export default function FactuPro() {
           onPDF={() => setPdf({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null, entreprise })}
           onEmail={() => setEmailModal({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null })}
           onPay={id => setPayPick(id)}
-          onDelete={() => setConf({ m: `Supprimer ${selF.id} ?`, fn: async () => {
-            const { supabase } = await import('../lib/supabase');
-            await supabase.from('factures').delete().eq('id', selF.dbId);
-            setSelF(null); fl("Facture supprimée");
-          }})}
         />}
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
