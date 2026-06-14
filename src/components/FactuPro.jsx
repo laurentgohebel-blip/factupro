@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 function normClient(c) { return c; } // same format
 function normCat(c) { return { id: c.id, cat: c.categorie, desc: c.description, unite: c.unite, pu: parseFloat(c.prix_unitaire) }; }
 function normDevis(d) {
-  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), notes: d.notes || '',
+  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), typeOp: d.type_operation || 'services', notes: d.notes || '',
     lignes: (d.devis_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: d };
 }
@@ -16,13 +16,16 @@ function normFacture(f) {
   if (statut === 'envoyee' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
     statut = 'en_retard';
   }
-  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
     relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
     lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: f };
 }
 
 /* ══════════════ UTILS ══════════════ */
+// Type d'opération (mention obligatoire facture 2026)
+const TYPE_OP = { biens: "Livraison de biens", services: "Prestation de services", mixte: "Opération mixte" };
+const typeOpLabel = (t) => TYPE_OP[t] || TYPE_OP.services;
 const tl = (l) => l.reduce((s, x) => s + x.qte * x.pu, 0);
 const fmt = (n) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 const fmtShort = (n) => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + "k €" : fmt(n);
@@ -109,14 +112,16 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   y = Math.max(hy, y + 22) + 4;
 
   // ── Bloc client ──
-  pdf.setFillColor(240, 247, 242); pdf.roundedRect(M, y, PW - 2 * M, 19, 2, 2, 'F');
+  const cliBoxH = client?.siret ? 25 : 21;
+  pdf.setFillColor(240, 247, 242); pdf.roundedRect(M, y, PW - 2 * M, cliBoxH, 2, 2, 'F');
   pdf.setTextColor(110); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7);
   pdf.text('CLIENT', M + 4, y + 5);
   pdf.setTextColor(20); pdf.setFontSize(11);
   pdf.text(client?.nom || '', M + 4, y + 11);
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(90);
-  if (client?.adresse) pdf.text(String(client.adresse), M + 4, y + 16);
-  y += 25;
+  if (client?.adresse) pdf.text(String(client.adresse), M + 4, y + 15.5);
+  if (client?.siret) pdf.text('SIRET ' + client.siret, M + 4, y + 20);
+  y += cliBoxH + 6;
 
   // ── En-tête tableau ──
   const C = { desc: M + 2, qte: 118, pu: 152, tot: PW - M - 2 };
@@ -169,8 +174,9 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   }
 
   // ── Mentions légales ──
+  const typeOpTxt = typeOpLabel(doc.typeOp).normalize('NFD').replace(/[̀-ͯ]/g, '');
   const mentions = isF
-    ? `Conditions de paiement : paiement a 30 jours. Echeance : ${dfr(doc.echeance)}. ${e.iban ? 'IBAN : ' + e.iban + '. ' : ''}En cas de retard, penalite de 3x le taux d'interet legal + indemnite forfaitaire de 40 EUR pour frais de recouvrement (art. L.441-10 C. com.). TVA ${tv}%${tv === 0 ? ' — TVA non applicable, art. 293 B du CGI' : ''}.`
+    ? `Type d'operation : ${typeOpTxt}. SIREN vendeur : ${(e.siret || '').slice(0, 9) || 'N/A'}. Conditions de paiement : paiement a 30 jours. Echeance : ${dfr(doc.echeance)}. ${e.iban ? 'IBAN : ' + e.iban + '. ' : ''}En cas de retard, penalite de 3x le taux d'interet legal + indemnite forfaitaire de 40 EUR pour frais de recouvrement (art. L.441-10 C. com.). TVA ${tv}%${tv === 0 ? ' — TVA non applicable, art. 293 B du CGI' : ''}.`
     : `Validite du devis : ${dfr(doc.validite)}. Devis gratuit. Les travaux ne debuteront qu'apres acceptation du present devis.`;
   const mLines = pdf.splitTextToSize(mentions, PW - 2 * M - 8);
   const mH = mLines.length * 3.6 + 8;
@@ -684,8 +690,8 @@ function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
         {type === "facture" && <div style={{ marginTop: 14 }}>
           <div style={{ padding: 10, background: "#f0f7f2", borderRadius: 6, fontSize: 9, color: "#555", lineHeight: 1.6, marginBottom: 6 }}>
             <strong style={{ color: T.primary }}>Mentions obligatoires</strong><br/>
-            Catégorie : Prestation de services · Adresse livraison : {client?.adresse || "id. facturation"}<br/>
-            SIREN : {(e.siret || "").slice(0, 11)} · TVA Intra : {e.tva_intra || "N/A"}
+            Type d'opération : {typeOpLabel(doc.typeOp)} · Adresse livraison : {client?.adresse || "id. facturation"}<br/>
+            SIREN vendeur : {(e.siret || "").slice(0, 9)} · TVA Intra : {e.tva_intra || "N/A"}{client?.siret ? ` · SIRET client : ${client.siret}` : ""}
           </div>
           <div style={{ padding: 10, background: "#f8f8f5", borderRadius: 6, fontSize: 9, color: "#888", lineHeight: 1.6, marginBottom: 6 }}>
             Paiement 30j · Échéance : {dfr(doc.echeance)} · Pénalité retard : 3× taux légal + 40€
@@ -780,7 +786,7 @@ function ClientForm({ client, onSave, onNo }) {
   const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{client ? "Modifier" : "Nouveau client"}</h2></div>
-    {[["nom","Nom complet"],["tel","Téléphone"],["email","Email"],["adresse","Adresse"]].map(([k, l]) => <div key={k} style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" }}>{l}</label><input className="search-glow" style={inputStyle} value={f[k]||""} onChange={e => setF({ ...f, [k]: e.target.value })} /></div>)}
+    {[["nom","Nom complet"],["tel","Téléphone"],["email","Email"],["adresse","Adresse"],["siret","SIRET (si professionnel)"]].map(([k, l]) => <div key={k} style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" }}>{l}</label><input className="search-glow" style={inputStyle} value={f[k]||""} onChange={e => setF({ ...f, [k]: e.target.value })} /></div>)}
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes</label><textarea className="search-glow" style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={f.notes||""} onChange={e => setF({ ...f, notes: e.target.value })} /></div>
     <button className="btn-press" style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font }} onClick={() => onSave(f)}>Enregistrer</button>
   </div>;
@@ -800,6 +806,7 @@ function ClientProfil({ client, devis, factures, onBack, onEdit }) {
       {client.adresse && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>📍 {client.adresse}</div>}
       {client.tel && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>📞 {client.tel}</div>}
       {client.email && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>✉ {client.email}</div>}
+      {client.siret && <div style={{ fontSize: 13, color: T.textMuted, marginBottom: 4 }}>🏢 SIRET {client.siret}</div>}
       {client.notes && <div style={{ marginTop: 8, fontSize: 12, color: T.textMuted, fontStyle: "italic", borderTop: `1px solid ${T.borderLight}`, paddingTop: 8 }}>{client.notes}</div>}
     </div>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
@@ -876,6 +883,7 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
   const [cId, setCId] = useState(init?.clientId || clients[0]?.id || "");
   const [ls, setLs] = useState(init?.lignes?.map(l => ({ ...l })) || [{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
   const [tv, setTv] = useState(init?.tva || 10);
+  const [typeOp, setTypeOp] = useState(init?.typeOp || "services");
   const [notes, setNotes] = useState(init?.notes || "");
   const [showC, setShowC] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -886,6 +894,7 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{init ? "Dupliquer" : "Nouveau devis"}</h2></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Type d'opération</label><Chips opts={[{ v: "services", l: "Services" }, { v: "biens", l: "Biens" }, { v: "mixte", l: "Mixte" }]} val={typeOp} set={setTypeOp} /></div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase" }}>Prestations</label>
       <button className="btn-press" onClick={() => setShowC(true)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Catalogue</button>
@@ -904,7 +913,7 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(tl(ls) * (1 + tv / 100))}</span></div>
     </div>
     <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions particulières, délais, remarques..." /></div>
-    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
+    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
     {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
   </div>;
 }
@@ -1087,6 +1096,7 @@ function generateFacturXml(doc, client, ent) {
       </ram:SellerTradeParty>
       <ram:BuyerTradeParty>
         <ram:Name>${(client?.nom || '').replace(/&/g,"&amp;")}</ram:Name>
+        ${client?.siret ? `<ram:SpecifiedLegalOrganization><ram:ID schemeID="0002">${client.siret}</ram:ID></ram:SpecifiedLegalOrganization>` : ''}
         <ram:PostalTradeAddress><ram:LineOne>${(client?.adresse || '').replace(/&/g,"&amp;")}</ram:LineOne><ram:CountryID>FR</ram:CountryID></ram:PostalTradeAddress>
       </ram:BuyerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
@@ -1143,9 +1153,10 @@ function generatePDFHtml(type, doc, client, signature, ent) {
   const mentionsObligatoires = isF ? `
     <div style="margin-top:24px;padding:14px;background:#f0f7f2;border-radius:8px;font-size:10px;color:#555;line-height:1.8">
       <strong style="font-size:11px;color:#1B4332">Mentions obligatoires</strong><br/>
-      <strong>Catégorie :</strong> Prestation de services<br/>
+      <strong>Type d'opération :</strong> ${typeOpLabel(doc.typeOp)}<br/>
       <strong>Adresse de livraison :</strong> ${client?.adresse || 'Identique à l\'adresse de facturation'}<br/>
-      <strong>N° SIREN vendeur :</strong> ${(e.siret || '').slice(0, 11)}<br/>
+      <strong>N° SIREN vendeur :</strong> ${(e.siret || '').slice(0, 9)}<br/>
+      ${client?.siret ? `<strong>SIRET client :</strong> ${client.siret}<br/>` : ''}
       <strong>N° TVA intracommunautaire :</strong> ${e.tva_intra || 'Non applicable'}
     </div>
     <div style="margin-top:12px;padding:14px;background:#f8f8f5;border-radius:8px;font-size:10px;color:#888;line-height:1.7">
@@ -1308,6 +1319,7 @@ function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
   const [cId, setCId] = useState(clients[0]?.id || "");
   const [ls, setLs] = useState([{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
   const [tv, setTv] = useState(20);
+  const [typeOp, setTypeOp] = useState("services");
   const [notes, setNotes] = useState("");
   const [echeance, setEcheance] = useState(in30());
   const [showC, setShowC] = useState(false);
@@ -1323,6 +1335,7 @@ function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Date d'échéance</label><input className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} type="date" value={echeance} onChange={e => setEcheance(e.target.value)} /></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Type d'opération</label><Chips opts={[{ v: "services", l: "Services" }, { v: "biens", l: "Biens" }, { v: "mixte", l: "Mixte" }]} val={typeOp} set={setTypeOp} /></div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
       <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase" }}>Prestations</label>
       <button className="btn-press" onClick={() => setShowC(true)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Catalogue</button>
@@ -1343,7 +1356,7 @@ function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
     <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions de paiement, IBAN..." /></div>
     <button className="btn-press" disabled={saving} onClick={async () => {
       const vl = ls.filter(l => l.desc.trim()); if (!vl.length || !cId) return;
-      setSaving(true); await onSave({ clientId: cId, tva: tv, echeance, lignes: vl, notes }); setSaving(false);
+      setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, echeance, lignes: vl, notes }); setSaving(false);
     }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer la facture"}</button>
     {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
   </div>;
@@ -1525,7 +1538,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b20</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b21</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1546,8 +1559,8 @@ export default function FactuPro() {
         {pg === "clients" && (editC || selC) && <ClientForm client={selC} onNo={() => { setSelC(null); setEditC(false); }}
           onSave={async c => {
             try {
-              if (c.id) { await updateClient(c.id, { nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes }); setProfC(null); }
-              else { await addClient({ nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes }); }
+              if (c.id) { await updateClient(c.id, { nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes, siret: c.siret }); setProfC(null); }
+              else { await addClient({ nom: c.nom, tel: c.tel, email: c.email, adresse: c.adresse, notes: c.notes, siret: c.siret }); }
               setSelC(null); setEditC(false); fl("Client enregistré ✓");
             } catch (e) { fl("Erreur: " + e.message); }
           }} />}
@@ -1618,7 +1631,7 @@ export default function FactuPro() {
           onSave={async d => {
             try {
               await addDevis(
-                { client_id: d.clientId, date_devis: tod(), date_validite: in30(), taux_tva: d.tva, notes: d.notes },
+                { client_id: d.clientId, date_devis: tod(), date_validite: in30(), taux_tva: d.tva, type_operation: d.typeOp, notes: d.notes },
                 d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
               );
               setDup(null); nav("devis"); fl("Devis créé ✓");
@@ -1631,7 +1644,7 @@ export default function FactuPro() {
           onSave={async d => {
             try {
               await addFactureDirecte(
-                { client_id: d.clientId, date_echeance: d.echeance, taux_tva: d.tva, notes: d.notes },
+                { client_id: d.clientId, date_echeance: d.echeance, taux_tva: d.tva, type_operation: d.typeOp, notes: d.notes },
                 d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
               );
               nav("factures"); fl("Facture créée ✓");

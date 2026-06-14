@@ -130,6 +130,7 @@ export function useDevis(entrepriseId) {
         date_devis: devisData.date_devis || new Date().toISOString().slice(0, 10),
         date_validite: devisData.date_validite,
         taux_tva: devisData.taux_tva || 10,
+        type_operation: devisData.type_operation || 'services',
         statut: 'en_attente',
         notes: devisData.notes || '',
       })
@@ -240,6 +241,7 @@ export function useFactures(entrepriseId) {
         date_facture: new Date().toISOString().slice(0, 10),
         date_echeance: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
         taux_tva: devisData.taux_tva,
+        type_operation: devisData.type_operation || 'services',
         statut: 'envoyee',
       })
       .select()
@@ -299,6 +301,7 @@ export function useFactures(entrepriseId) {
         date_facture: factureData.date_facture || new Date().toISOString().slice(0, 10),
         date_echeance: factureData.date_echeance,
         taux_tva: factureData.taux_tva || 20,
+        type_operation: factureData.type_operation || 'services',
         statut: 'envoyee',
         notes: factureData.notes || '',
       })
