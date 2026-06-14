@@ -10,7 +10,7 @@ const C = {
 
 const FEATURES = [
   { icon: '📄', title: 'Devis en 30 secondes', desc: 'Catalogue de prestations, TVA automatique, signature électronique du client.' },
-  { icon: '🧾', title: 'Facturation conforme', desc: 'Factures Factur-X (norme EN 16931), mentions légales 2026, numérotation séquentielle.' },
+  { icon: '🧾', title: 'Factures professionnelles', desc: 'Mentions légales, numérotation séquentielle sans rupture, PDF prêt à envoyer.' },
   { icon: '💰', title: 'Suivi des paiements', desc: 'Tableau de bord en temps réel, relances automatiques, export comptable CSV.' },
   { icon: '📊', title: 'Statistiques métier', desc: 'CA mensuel, taux de conversion devis, délai moyen de paiement, top clients.' },
   { icon: '✉', title: 'Envoi par email', desc: 'Email pré-rempli avec le PDF joint en un clic, depuis n\'importe quel appareil.' },
@@ -36,7 +36,7 @@ const PLANS = [
 const FAQS = [
   { q: 'Mes données sont-elles sécurisées ?', r: 'Oui. Toutes les données sont chiffrées et hébergées en Europe (Irlande). Chaque artisan voit uniquement ses propres données.' },
   { q: 'Puis-je annuler à tout moment ?', r: 'Oui, sans engagement. Vous gardez accès à toutes vos données même après résiliation.' },
-  { q: 'Est-ce que FactuPro est conforme aux obligations légales ?', r: 'Oui. Les factures respectent la norme Factur-X (EN 16931) et incluent toutes les mentions obligatoires 2026.' },
+  { q: 'Est-ce que FactuPro est conforme aux obligations légales ?', r: 'Les factures incluent les mentions légales obligatoires et une numérotation séquentielle sans rupture. La facturation électronique (Factur-X via plateforme agréée), imposée aux TPE/PME au 1er septembre 2027, est en cours de préparation.' },
   { q: 'Fonctionne-t-il sur téléphone ?', r: 'Oui. FactuPro est une Progressive Web App installable sur iPhone et Android, optimisée pour une utilisation sur chantier.' },
 ]
 
@@ -76,7 +76,7 @@ export default function Landing() {
       {/* HERO */}
       <section style={{ padding: '80px 24px 64px', textAlign: 'center', maxWidth: 800, margin: '0 auto' }}>
         <div className="fade-up" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: C.pale, color: C.primary, padding: '6px 16px', borderRadius: 20, fontSize: 13, fontWeight: 600, marginBottom: 24 }}>
-          ✓ Conforme aux obligations légales 2026
+          ✓ Mentions légales & numérotation séquentielle
         </div>
         <h1 className="fade-up fade-up-1" style={{ fontSize: 'clamp(36px, 6vw, 60px)', fontWeight: 800, lineHeight: 1.1, letterSpacing: -1.5, marginBottom: 20, color: C.text }}>
           Devis & facturation<br />
@@ -134,7 +134,7 @@ export default function Landing() {
             {[
               { step: '1', title: 'Créez votre devis', desc: 'Sélectionnez vos prestations depuis le catalogue, ajustez les quantités et envoyez par email.' },
               { step: '2', title: 'Le client signe', desc: 'Signature électronique directement sur l\'écran, en chantier ou à distance.' },
-              { step: '3', title: 'Transformez en facture', desc: 'Un clic pour convertir le devis accepté en facture conforme et l\'envoyer.' },
+              { step: '3', title: 'Transformez en facture', desc: 'Un clic pour convertir le devis accepté en facture et l\'envoyer.' },
             ].map(({ step, title, desc }) => (
               <div key={step} style={{ textAlign: 'center' }}>
                 <div style={{ width: 56, height: 56, borderRadius: '50%', background: C.primary, color: '#fff', fontSize: 22, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>{step}</div>

@@ -134,7 +134,7 @@ export default function Login() {
       </div>
 
       <div style={{ marginTop: 20, fontSize: 12, color: tS, textAlign: 'center', lineHeight: 1.6 }}>
-        Gratuit · Données sécurisées · Conforme aux obligations légales
+        Gratuit · Données sécurisées · Hébergé en Europe
       </div>
     </div>
   )

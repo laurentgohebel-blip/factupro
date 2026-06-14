@@ -652,7 +652,7 @@ function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
         <span style={{ fontWeight: 700, fontSize: 13 }}>📄 {ti} {doc.id}</span>
         <div style={{ display: "flex", gap: 6 }}>
           <button onClick={() => openPrintablePDF(type, doc, client, signature, entreprise)} style={{ background: "rgba(255,255,255,0.25)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ PDF</button>
-          {type === "facture" && <button onClick={() => downloadFacturX(doc, client, entreprise)} style={{ background: "rgba(255,255,255,0.25)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Factur-X</button>}
+          {type === "facture" && <button onClick={() => downloadFacturX(doc, client, entreprise)} style={{ background: "rgba(255,255,255,0.25)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 Export XML</button>}
           <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✕</button>
         </div>
       </div>
@@ -690,8 +690,8 @@ function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
           <div style={{ padding: 10, background: "#f8f8f5", borderRadius: 6, fontSize: 9, color: "#888", lineHeight: 1.6, marginBottom: 6 }}>
             Paiement 30j · Échéance : {dfr(doc.echeance)} · Pénalité retard : 3× taux légal + 40€
           </div>
-          <div style={{ padding: 6, background: "#e8f5e9", borderRadius: 6, fontSize: 8, color: "#2E7D32", textAlign: "center" }}>
-            ✓ Facture Factur-X (EN 16931)
+          <div style={{ padding: 6, background: "#f0f0ec", borderRadius: 6, fontSize: 8, color: "#888", textAlign: "center" }}>
+            Numérotation séquentielle · Mentions légales
           </div>
         </div>}
       </div>
@@ -1154,8 +1154,8 @@ function generatePDFHtml(type, doc, client, signature, ent) {
       En cas de retard, pénalité de 3× le taux d'intérêt légal + indemnité forfaitaire de 40€ pour frais de recouvrement (art. L.441-10 C. com.).<br/>
       TVA ${tv}% — ${tv === 0 ? 'TVA non applicable, art. 293 B du CGI' : `Taux de TVA appliqué : ${tv}%`}
     </div>
-    <div style="margin-top:8px;padding:8px 14px;background:#e8f5e9;border-radius:8px;font-size:9px;color:#2E7D32;display:flex;align-items:center;gap:6px">
-      ✓ Facture conforme Factur-X (norme EN 16931) — Format électronique structuré
+    <div style="margin-top:8px;padding:8px 14px;background:#f0f0ec;border-radius:8px;font-size:9px;color:#888;display:flex;align-items:center;gap:6px">
+      Numérotation séquentielle sans rupture · Mentions légales obligatoires
     </div>`
   : `<div style="margin-top:24px;padding:14px;background:#f8f8f5;border-radius:8px;font-size:10px;color:#888;line-height:1.7">
       <strong>Validité :</strong> ${dfr(doc.validite)}. Devis gratuit. Les travaux ne débuteront qu'après acceptation du présent devis.
@@ -1525,7 +1525,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b19</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b20</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
