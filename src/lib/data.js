@@ -290,6 +290,50 @@ export function useFactures(entrepriseId) {
     return data
   }
 
+  // Crée un avoir (note de crédit) sur une facture : montants négatifs.
+  async function creerAvoir(facture) {
+    const { data: numData } = await supabase.rpc('prochain_numero', {
+      p_entreprise_id: entrepriseId,
+      p_type: 'avoir'
+    })
+
+    const { data, error } = await supabase
+      .from('factures')
+      .insert({
+        entreprise_id: entrepriseId,
+        client_id: facture.client_id,
+        type: 'avoir',
+        facture_origine_id: facture.id,
+        numero: numData,
+        date_facture: new Date().toISOString().slice(0, 10),
+        date_echeance: new Date().toISOString().slice(0, 10),
+        taux_tva: facture.taux_tva,
+        type_operation: facture.type_operation || 'services',
+        statut: 'envoyee',
+        notes: `Avoir sur facture ${facture.numero}`,
+      })
+      .select()
+      .single()
+    if (error) throw error
+
+    const lignes = facture.facture_lignes || []
+    if (lignes.length) {
+      await supabase.from('facture_lignes').insert(
+        lignes.map((l, i) => ({
+          facture_id: data.id,
+          description: l.description,
+          quantite: l.quantite,
+          unite: l.unite,
+          prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)),
+          ordre: i,
+        }))
+      )
+    }
+
+    await load()
+    return data
+  }
+
   async function marquerPayee(id, modePaiement) {
     const { data, error } = await supabase
       .from('factures')
@@ -354,5 +398,5 @@ export function useFactures(entrepriseId) {
     await load()
   }
 
-  return { factures, loading, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance, reload: load }
+  return { factures, loading, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, envoyerRelance, reload: load }
 }

@@ -13,10 +13,10 @@ function normDevis(d) {
 }
 function normFacture(f) {
   let statut = f.statut;
-  if (statut === 'envoyee' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
+  if (statut === 'envoyee' && f.type !== 'avoir' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
     statut = 'en_retard';
   }
-  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
     relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
     lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: f };
@@ -85,7 +85,7 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   const signature = await shrinkDataUrl(doc.signature || null);
   const e = entreprise || {};
   const isF = type === 'facture';
-  const ti = isF ? 'FACTURE' : 'DEVIS';
+  const ti = doc.type === 'avoir' ? 'AVOIR' : (isF ? 'FACTURE' : 'DEVIS');
   const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
   const money = n => (n || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\s/g, ' ').replace(/[  ]/g, ' ') + ' €';
   const GREEN = [27, 67, 50];
@@ -222,7 +222,7 @@ function defaultMessage(type, doc, client, entreprise) {
 
 function buildEmailHtml(type, doc, client, entreprise, customMessage) {
   const isF = type === "facture";
-  const ti = isF ? "Facture" : "Devis";
+  const ti = doc.type === "avoir" ? "Avoir" : (isF ? "Facture" : "Devis");
   const ht = tl(doc.lignes);
   const tv = doc.tva || 10;
   const tva = ht * tv / 100;
@@ -310,7 +310,7 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
 
 function buildEmailContent(type, doc, client, entreprise) {
   const isF = type === "facture";
-  const ti = isF ? "Facture" : "Devis";
+  const ti = doc.type === "avoir" ? "Avoir" : (isF ? "Facture" : "Devis");
   const ht = tl(doc.lignes);
   const tv = doc.tva || 10;
   const e = entreprise || {};
@@ -659,7 +659,7 @@ function SigPad({ onSave, onNo }) {
 }
 
 function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
-  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva, isF = type === "facture", ti = isF ? "FACTURE" : "DEVIS";
+  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva, isF = type === "facture", ti = doc.type === "avoir" ? "AVOIR" : (isF ? "FACTURE" : "DEVIS");
   const e = entreprise || {};
   return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, overflowY: "auto", padding: "16px 8px", animation: "fadeIn .2s" }}>
     <div style={{ background: "#fff", width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadowLg }}>
@@ -927,15 +927,18 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
   </div>;
 }
 
-function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onDelete }) {
+function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir }) {
   const ht = tl(facture.lignes), tv = facture.tva || 10, tva = ht * tv / 100, tot = ht + tva;
   const p = PAIEMENTS.find(y => y.v === facture.paiement);
+  const isAvoir = facture.type === "avoir";
   return <div>
-    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
       <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
       <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>{facture.id}</h2>
+      {isAvoir && <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E" }}>AVOIR</span>}
       <Badge statut={facture.statut} />
     </div>
+    {isAvoir && facture.notes && <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 10 }}>↩ {facture.notes}</div>}
 
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4 }}>Client</div>
@@ -969,8 +972,9 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onDelet
       {facture.statut !== "payee" && <button className="btn-press" onClick={() => onPay(facture.dbId)} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰 Marquer payée</button>}
       <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
       <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
+      {!isAvoir && <button className="btn-press" onClick={onAvoir} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.accent}`, background: T.accentPale, color: "#92400E", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>↩ Créer un avoir</button>}
     </div>
-    <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>🔒 Facture émise — inaltérable. Pour corriger, créez un avoir.</div>
+    {!isAvoir && <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>🔒 Facture émise — inaltérable. Pour corriger, créez un avoir.</div>}
   </div>;
 }
 
@@ -982,7 +986,7 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
     <Search v={q} set={setQ} /><Chips opts={[{ v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
     {f.map(x => { const cl = clients.find(c => c.id === x.clientId); return <div key={x.id} className="card-hover" onClick={() => onSelect(x)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div><div style={{ fontWeight: 700, fontSize: 14 }}>{x.id}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
+        <div><div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>{x.id}{x.type === "avoir" && <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "#FEF3C7", color: "#92400E" }}>AVOIR</span>}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
         <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(x))}</div><div style={{ marginTop: 4 }}><Badge statut={x.statut} /></div></div>
       </div>
     </div>; })}
@@ -990,8 +994,8 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
 }
 
 function Relances({ factures, clients, onRelance, onPaid }) {
-  const ov = factures.filter(f => f.statut !== "payee" && dd(f.echeance, tod()) > 0);
-  const pe = factures.filter(f => f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
+  const ov = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) > 0);
+  const pe = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
   return <div>
     <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Relances</div>
     {ov.map(f => { const cl = clients.find(c => c.id === f.clientId); return <div key={f.id} className="fade-up" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, borderLeft: `4px solid ${T.danger}` }}>
@@ -1153,7 +1157,7 @@ function downloadFacturX(doc, client, entreprise) {
 
 function generatePDFHtml(type, doc, client, signature, ent) {
   const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
-  const isF = type === "facture", ti = isF ? "FACTURE" : "DEVIS";
+  const isF = type === "facture", ti = doc.type === "avoir" ? "AVOIR" : (isF ? "FACTURE" : "DEVIS");
   const e = ent || {};
   const lignesHtml = doc.lignes.map(l => `<tr style="border-bottom:1px solid #eee"><td style="padding:10px 8px;font-size:13px">${l.desc}</td><td style="padding:10px 8px;text-align:center;font-size:13px">${l.qte} ${l.unite}</td><td style="padding:10px 8px;text-align:right;font-size:13px">${fmt(l.pu)}</td><td style="padding:10px 8px;text-align:right;font-weight:600;font-size:13px">${fmt(l.qte * l.pu)}</td></tr>`).join("");
   const sigHtml = signature ? `<div style="margin-top:30px;display:flex;justify-content:flex-end"><div style="text-align:center"><p style="font-size:11px;color:#666;margin-bottom:6px">Bon pour accord — Signature du client</p><img src="${signature}" style="height:70px;border-bottom:1px solid #ccc"/></div></div>` : "";
@@ -1399,7 +1403,7 @@ export default function FactuPro() {
   const { entreprise, signOut, updateEntreprise } = useAuth();
   const { clients: rawClients, addClient, updateClient } = useClients(entreprise?.id);
   const { devis: rawDevis, addDevis, updateDevis, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
-  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
+  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
   const { entries: auditEntries } = useAudit(entreprise?.id);
@@ -1562,7 +1566,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b23</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b24</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1690,6 +1694,13 @@ export default function FactuPro() {
           onPDF={() => setPdf({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null, entreprise })}
           onEmail={() => setEmailModal({ type: "facture", doc: selF, client: cls.find(c => c.id === selF.clientId), signature: null })}
           onPay={id => setPayPick(id)}
+          onAvoir={() => setConf({ m: `Créer un avoir pour annuler/corriger ${selF.id} ? Cette opération est définitive.`, fn: async () => {
+            try {
+              const av = await creerAvoir(selF._raw);
+              setSelF(normFacture({ ...av, facture_lignes: (selF._raw.facture_lignes || []).map(l => ({ ...l, prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)) })) }));
+              fl("Avoir créé ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }})}
         />}
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
