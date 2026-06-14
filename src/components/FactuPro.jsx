@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
-import { useClients, useDevis, useFactures, useCatalogue, useSubscription } from '../lib/data';
+import { useClients, useDevis, useFactures, useCatalogue, useSubscription, useAudit } from '../lib/data';
 import { supabase } from '../lib/supabase';
 
 /* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
@@ -26,6 +26,15 @@ function normFacture(f) {
 // Type d'opération (mention obligatoire facture 2026)
 const TYPE_OP = { biens: "Livraison de biens", services: "Prestation de services", mixte: "Opération mixte" };
 const typeOpLabel = (t) => TYPE_OP[t] || TYPE_OP.services;
+// Libellé lisible d'une entrée du journal d'audit
+const auditLabel = (a) => {
+  const t = a.table_name === "factures" ? "Facture" : "Devis";
+  const num = a.numero ? " " + a.numero : "";
+  if (a.action === "INSERT") return `Création ${t}${num}`;
+  if (a.action === "DELETE") return `Suppression ${t}${num}`;
+  if (a.statut_avant !== a.statut_apres) return `${t}${num} : ${a.statut_avant || "—"} → ${a.statut_apres || "—"}`;
+  return `Modification ${t}${num}`;
+};
 const tl = (l) => l.reduce((s, x) => s + x.qte * x.pu, 0);
 const fmt = (n) => n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 const fmtShort = (n) => n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + "k €" : fmt(n);
@@ -1193,7 +1202,7 @@ function openPrintablePDF(type, doc, client, signature, entreprise) {
 }
 
 /* ══════════════ PROFIL ENTREPRISE ══════════════ */
-function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5 }) {
+function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5, audit = [] }) {
   const [f, setF] = useState({
     nom: entreprise?.nom || "", siret: entreprise?.siret || "", adresse: entreprise?.adresse || "",
     tel: entreprise?.tel || "", email: entreprise?.email || "", ape: entreprise?.ape || "", tva_intra: entreprise?.tva_intra || "", iban: entreprise?.iban || "",
@@ -1256,6 +1265,20 @@ function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, 
           <button className="btn-press" onClick={onUpgrade} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>⭐ Passer à Pro</button>
         </>
       )}
+    </div>
+
+    {/* ── Journal d'activité (piste d'audit) ── */}
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14, marginTop: 22 }}>Journal d'activité</div>
+    <div className="fade-up" style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 14 }}>
+      <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>Historique inaltérable des opérations sur vos devis et factures (piste d'audit légale).</div>
+      {audit.length === 0
+        ? <div style={{ fontSize: 13, color: T.textLight, textAlign: "center", padding: "12px 0" }}>Aucune opération enregistrée</div>
+        : audit.slice(0, 20).map(a => (
+          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: `1px solid ${T.borderLight}` }}>
+            <span style={{ fontSize: 12, color: T.text }}>{auditLabel(a)}</span>
+            <span style={{ fontSize: 10, color: T.textLight, whiteSpace: "nowrap" }}>{new Date(a.created_at).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+        ))}
     </div>
 
     <button className="btn-press" onClick={onSignOut} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "1.5px solid #FECACA", background: T.dangerPale, color: "#991B1B", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Déconnexion</button>
@@ -1379,6 +1402,7 @@ export default function FactuPro() {
   const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
+  const { entries: auditEntries } = useAudit(entreprise?.id);
 
   // Normalize data for UI — useMemo évite de recréer les tableaux à chaque render
   const cls = useMemo(() => rawClients.map(normClient), [rawClients]);
@@ -1538,7 +1562,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b21</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b22</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1685,7 +1709,7 @@ export default function FactuPro() {
           onExportDevis={() => { exportDevisCSV(dvs, cls); fl("Export devis téléchargé ✓"); }}
         />}
 
-        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} devisMois={devisMois} facturesMois={facturesMois} freeLimit={FREE_LIMIT} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+        {pg === "profil" && <ProfilPage entreprise={entreprise} plan={plan} isPro={isPro} subscription={subscription} devisMois={devisMois} facturesMois={facturesMois} freeLimit={FREE_LIMIT} audit={auditEntries} onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
       </div>
 
       {/* Nav */}

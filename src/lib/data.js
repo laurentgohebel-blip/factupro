@@ -207,6 +207,26 @@ export function useSubscription(entrepriseId) {
   return { subscription, plan, isPro, loading, reload: load }
 }
 
+// ─── Journal d'audit (lecture seule) ───
+export function useAudit(entrepriseId) {
+  const [entries, setEntries] = useState([])
+
+  const load = useCallback(async () => {
+    if (!entrepriseId) return
+    const { data } = await supabase
+      .from('audit_log')
+      .select('*')
+      .eq('entreprise_id', entrepriseId)
+      .order('created_at', { ascending: false })
+      .limit(50)
+    setEntries(data || [])
+  }, [entrepriseId])
+
+  useEffect(() => { load() }, [load])
+
+  return { entries, reload: load }
+}
+
 // ─── Factures ───
 export function useFactures(entrepriseId) {
   const [factures, setFactures] = useState([])
