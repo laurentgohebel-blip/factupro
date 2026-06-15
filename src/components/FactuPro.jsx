@@ -339,8 +339,9 @@ SIRET : ${e.siret || ""}`;
   return { subject, body, to: client?.email || "" };
 }
 
-function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent, defaultMessage: initMessage }) {
-  const { subject, to } = buildEmailContent(type, doc, client, entreprise);
+function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent, defaultMessage: initMessage, relance }) {
+  const { subject: baseSubject, to } = buildEmailContent(type, doc, client, entreprise);
+  const subject = relance ? `RELANCE — ${baseSubject}` : baseSubject;
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
@@ -1654,7 +1655,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b27</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b28</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1791,7 +1792,7 @@ export default function FactuPro() {
           ? <Relances factures={fcs} clients={cls}
               onRelance={f => {
                 const client = cls.find(c => c.id === f.clientId);
-                setEmailModal({ type: "facture", doc: f, client, signature: null,
+                setEmailModal({ type: "facture", doc: f, client, signature: null, relance: true,
                   defaultMessage: defaultMessage("relance", f, client, entreprise),
                   onSent: () => { envoyerRelance(f.dbId); } });
               }}
