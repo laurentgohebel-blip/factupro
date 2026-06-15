@@ -11,7 +11,7 @@ const C = {
 const FEATURES = [
   { icon: '📄', title: 'Devis en 30 secondes', desc: 'Catalogue de prestations, TVA automatique, signature électronique du client.' },
   { icon: '🧾', title: 'Factures professionnelles', desc: 'Mentions légales, numérotation séquentielle sans rupture, PDF prêt à envoyer.' },
-  { icon: '💰', title: 'Suivi des paiements', desc: 'Tableau de bord en temps réel, relances automatiques, export comptable CSV.' },
+  { icon: '💰', title: 'Suivi des paiements', desc: 'Tableau de bord en temps réel, relances par email en 1 clic, export comptable CSV.' },
   { icon: '📊', title: 'Statistiques métier', desc: 'CA mensuel, taux de conversion devis, délai moyen de paiement, top clients.' },
   { icon: '✉', title: 'Envoi par email', desc: 'Email pré-rempli avec le PDF joint en un clic, depuis n\'importe quel appareil.' },
   { icon: '📱', title: 'Application mobile', desc: 'Installable sur iPhone et Android. Fonctionne sur chantier sans connexion.' },
@@ -28,7 +28,7 @@ const PLANS = [
     name: 'Pro', price: '9€', period: '/ mois HT',
     color: C.primary, bg: C.primary,
     badge: '⭐ Le plus populaire',
-    features: ['Devis illimités', 'Factures illimitées', 'Clients illimités', 'Catalogue illimité', 'Export comptable', 'Relances automatiques', 'Support prioritaire'],
+    features: ['Devis illimités', 'Factures illimitées', 'Clients illimités', 'Catalogue illimité', 'Export comptable', 'Relances par email', 'Support prioritaire'],
     cta: 'Essayer 14 jours gratuit', ctaStyle: 'solid',
   },
 ]

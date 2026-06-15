@@ -1029,6 +1029,18 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
   </div>;
 }
 
+function ProLock({ titre, desc, onUpgrade }) {
+  return <div>
+    <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>{titre}</div>
+    <div className="fade-up" style={{ background: `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})`, color: "#fff", borderRadius: T.radius, padding: 26, textAlign: "center", boxShadow: T.shadow }}>
+      <div style={{ fontSize: 42, marginBottom: 10 }}>🔒</div>
+      <div style={{ fontSize: 19, fontWeight: 800, marginBottom: 8 }}>Fonctionnalité Pro</div>
+      <div style={{ fontSize: 13, opacity: 0.9, lineHeight: 1.6, marginBottom: 20 }}>{desc}</div>
+      <button className="btn-press" onClick={onUpgrade} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: "#fff", color: T.primary, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: T.font }}>⭐ Passer à Pro — 9 €/mois</button>
+    </div>
+  </div>;
+}
+
 function Relances({ factures, clients, onRelance, onPaid }) {
   const ov = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) > 0);
   const pe = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
@@ -1038,7 +1050,7 @@ function Relances({ factures, clients, onRelance, onPaid }) {
       <div style={{ fontWeight: 700, fontSize: 14 }}>{f.id} — {cl?.nom}</div>
       <div style={{ fontSize: 12, color: T.danger, fontWeight: 600, marginTop: 2 }}>⚠ {dd(f.echeance, tod())}j de retard · {fmt(ttc(f))}</div>
       <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-        <button className="btn-press" onClick={() => onRelance(f.dbId || f.id)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Relancer</button>
+        <button className="btn-press" onClick={() => onRelance(f)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Relancer</button>
         <button className="btn-press" onClick={() => onPaid(f.dbId || f.id)} style={{ padding: "7px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✓ Payée</button>
       </div>
     </div>; })}
@@ -1642,7 +1654,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b26</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b27</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1775,10 +1787,18 @@ export default function FactuPro() {
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
 
-        {pg === "relances" && <Relances factures={fcs} clients={cls}
-          onRelance={async id => { await envoyerRelance(id); fl("Relance envoyée ✓"); }}
-          onPaid={id => setPayPick(id)}
-        />}
+        {pg === "relances" && (isPro
+          ? <Relances factures={fcs} clients={cls}
+              onRelance={f => {
+                const client = cls.find(c => c.id === f.clientId);
+                setEmailModal({ type: "facture", doc: f, client, signature: null,
+                  defaultMessage: defaultMessage("relance", f, client, entreprise),
+                  onSent: () => { envoyerRelance(f.dbId); } });
+              }}
+              onPaid={id => setPayPick(id)}
+            />
+          : <ProLock titre="Relances" desc="Relancez vos clients en retard de paiement par email en un clic, avec un message pré-rempli et la facture jointe. Passez à Pro pour activer les relances." onUpgrade={startCheckout} />
+        )}
 
         {pg === "analytics" && <Analytics factures={fcs} devis={dvs} clients={cls}
           onExportFactures={() => { exportCSV(fcs, cls); fl("Export factures téléchargé ✓"); }}
