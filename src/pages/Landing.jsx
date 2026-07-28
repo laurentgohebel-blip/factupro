@@ -80,7 +80,7 @@ export default function Landing() {
         </div>
         <h1 className="fade-up fade-up-1" style={{ fontSize: 'clamp(36px, 6vw, 60px)', fontWeight: 800, lineHeight: 1.1, letterSpacing: -1.5, marginBottom: 20, color: C.text }}>
           Devis & facturation<br />
-          <span style={{ color: C.primary }}>pour les artisans</span>
+          
         </h1>
         <p className="fade-up fade-up-2" style={{ fontSize: 18, color: C.muted, lineHeight: 1.7, marginBottom: 36, maxWidth: 560, margin: '0 auto 36px' }}>
           Créez des devis professionnels, convertissez-les en factures et encaissez plus vite. Simple, rapide, depuis votre téléphone.
