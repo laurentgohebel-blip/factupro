@@ -34,7 +34,7 @@ const PLANS = [
 ]
 
 const FAQS = [
-  { q: 'Mes données sont-elles sécurisées ?', r: 'Oui. Toutes les données sont chiffrées et hébergées en Europe (Irlande). Chaque artisan voit uniquement ses propres données.' },
+  { q: 'Mes données sont-elles sécurisées ?', r: 'Oui. Toutes les données sont chiffrées et hébergées en Europe (Irlande). Vous voyez uniquement ses propres données.' },
   { q: 'Puis-je annuler à tout moment ?', r: 'Oui, sans engagement. Vous gardez accès à toutes vos données même après résiliation.' },
   { q: 'Est-ce que FactuPro est conforme aux obligations légales ?', r: 'Les factures incluent les mentions légales obligatoires et une numérotation séquentielle sans rupture. La facturation électronique (Factur-X via plateforme agréée), imposée aux TPE/PME au 1er septembre 2027, est en cours de préparation.' },
   { q: 'Fonctionne-t-il sur téléphone ?', r: 'Oui. FactuPro est une Progressive Web App installable sur iPhone et Android, optimisée pour une utilisation sur chantier.' },
@@ -99,7 +99,7 @@ export default function Landing() {
       {/* MOCKUP / STATS BAND */}
       <section style={{ background: `linear-gradient(135deg, ${C.primary} 0%, ${C.lighter} 100%)`, padding: '40px 24px', margin: '0 0 80px' }}>
         <div style={{ maxWidth: 900, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 32, textAlign: 'center', color: '#fff' }}>
-          {[['500+', 'Artisans utilisateurs'], ['98%', 'Satisfaction client'], ['30s', 'Pour créer un devis'], ['0€', 'Pour commencer']].map(([v, l]) => (
+          {[['500+', 'Utilisateurs'], ['98%', 'Satisfaction client'], ['30s', 'Pour créer un devis'], ['0€', 'Pour commencer']].map(([v, l]) => (
             <div key={l}>
               <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{v}</div>
               <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>{l}</div>
@@ -112,7 +112,7 @@ export default function Landing() {
       <section style={{ padding: '0 24px 80px', maxWidth: 1100, margin: '0 auto' }}>
         <div style={{ textAlign: 'center', marginBottom: 48 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.lighter, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>Fonctionnalités</div>
-          <h2 style={{ fontSize: 'clamp(28px, 4vw, 40px)', fontWeight: 800, letterSpacing: -0.8 }}>Tout ce dont un artisan a besoin</h2>
+          <h2 style={{ fontSize: 'clamp(28px, 4vw, 40px)', fontWeight: 800, letterSpacing: -0.8 }}>Tout ce dont vous avez besoin</h2>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
           {FEATURES.map((f, i) => (
