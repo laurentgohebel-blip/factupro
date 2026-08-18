@@ -93,6 +93,28 @@ async function shrinkDataUrl(dataUrl, maxW = 360) {
   } catch { return null; }
 }
 
+// Redimensionne un logo en conservant la transparence (PNG), borné en largeur.
+async function resizeLogo(dataUrl, maxW = 400) {
+  if (!dataUrl) return null;
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
+    const nw = img.naturalWidth || maxW, nh = img.naturalHeight || maxW;
+    const scale = Math.min(1, maxW / nw);
+    const w = Math.max(1, Math.round(nw * scale)), h = Math.max(1, Math.round(nh * scale));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/png');
+  } catch { return null; }
+}
+
+// Dimensions naturelles d'une image (pour préserver le ratio dans le PDF).
+async function imgDims(dataUrl) {
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
+    return { w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+  } catch { return { w: 3, h: 1 }; }
+}
+
 // Génération du PDF NATIVEMENT avec jsPDF (texte/tableau dessinés, pas de
 // capture d'écran). html2canvas rend une page blanche sur certains mobiles /
 // en mode PWA — cette approche est fiable partout.
@@ -114,12 +136,22 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   let y = M;
 
   // ── En-tête ──
-  pdf.setTextColor(...GREEN); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20);
-  pdf.text('FactuPro', M, y + 2);
-  pdf.setTextColor(20); pdf.setFontSize(11);
-  pdf.text(e.nom || '', M, y + 9);
+  let hy;
+  if (e.logo_url) {
+    const d = await imgDims(e.logo_url);
+    const logoH = 14, logoW = Math.min(50, logoH * (d.w / d.h || 3));
+    try { pdf.addImage(e.logo_url, 'PNG', M, y, logoW, logoH); } catch (err) { console.warn('logo:', err); }
+    pdf.setTextColor(20); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(11);
+    pdf.text(e.nom || '', M, y + logoH + 6);
+    hy = y + logoH + 11;
+  } else {
+    pdf.setTextColor(...GREEN); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(20);
+    pdf.text('FactuPro', M, y + 2);
+    pdf.setTextColor(20); pdf.setFontSize(11);
+    pdf.text(e.nom || '', M, y + 9);
+    hy = y + 14;
+  }
   pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(110);
-  let hy = y + 14;
   if (e.adresse) { pdf.text(String(e.adresse), M, hy); hy += 4; }
   const contact = [e.tel, e.email].filter(Boolean).join('   ');
   if (contact) { pdf.text(contact, M, hy); hy += 4; }
@@ -692,7 +724,7 @@ function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
       <div style={{ padding: 20, fontFamily: T.font, fontSize: 11 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 18 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: T.primary }}>⚡ FactuPro</div>
+            {e.logo_url ? <img src={e.logo_url} alt="" style={{ maxHeight: 40, maxWidth: 130, marginBottom: 4, display: "block" }} /> : <div style={{ fontSize: 18, fontWeight: 800, color: T.primary }}>⚡ FactuPro</div>}
             <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>{e.nom}</div>
             <div style={{ fontSize: 9, color: "#666" }}>{e.adresse}</div>
             <div style={{ fontSize: 9, color: "#666" }}>{e.tel} — {e.email}</div>
@@ -1279,7 +1311,7 @@ function generatePDFHtml(type, doc, client, signature, ent) {
   const notesHtml = doc.notes ? `<div style="margin-top:16px;padding:14px;background:#fafaf7;border-radius:8px;border-left:3px solid #1B4332;font-size:11px;color:#555;line-height:1.7"><strong style="color:#1B4332">Notes :</strong> ${doc.notes}</div>` : '';
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${ti} ${doc.id}</title><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Outfit',sans-serif;color:#1a1a18;padding:40px;max-width:800px;margin:0 auto}@media print{body{padding:20px}.no-print{display:none!important}}</style></head><body>
-<div style="display:flex;justify-content:space-between;margin-bottom:30px"><div><div style="font-size:28px;font-weight:800;color:#1B4332">⚡ FactuPro</div><div style="font-size:14px;font-weight:700;margin-top:4px">${e.nom||''}</div><div style="font-size:11px;color:#666;margin-top:2px">${e.adresse||''}</div><div style="font-size:11px;color:#666">Tél : ${e.tel||''} — ${e.email||''}</div><div style="font-size:10px;color:#999;margin-top:4px">SIRET : ${e.siret||''} — APE : ${e.ape||''} — TVA Intra : ${e.tva_intra||''}</div></div><div style="text-align:right"><div style="font-size:24px;font-weight:800;color:#1B4332;letter-spacing:2px">${ti}</div><div style="font-size:16px;font-weight:700;margin-top:4px">${doc.id}</div><div style="font-size:12px;color:#666;margin-top:4px">Date : ${dfr(doc.date)}</div>${isF ? `<div style="font-size:11px;color:#666">Échéance : ${dfr(doc.echeance)}</div>` : ''}</div></div>
+<div style="display:flex;justify-content:space-between;margin-bottom:30px"><div>${e.logo_url ? `<img src="${e.logo_url}" style="max-height:56px;max-width:180px;margin-bottom:6px;display:block"/>` : '<div style="font-size:28px;font-weight:800;color:#1B4332">⚡ FactuPro</div>'}<div style="font-size:14px;font-weight:700;margin-top:4px">${e.nom||''}</div><div style="font-size:11px;color:#666;margin-top:2px">${e.adresse||''}</div><div style="font-size:11px;color:#666">Tél : ${e.tel||''} — ${e.email||''}</div><div style="font-size:10px;color:#999;margin-top:4px">SIRET : ${e.siret||''} — APE : ${e.ape||''} — TVA Intra : ${e.tva_intra||''}</div></div><div style="text-align:right"><div style="font-size:24px;font-weight:800;color:#1B4332;letter-spacing:2px">${ti}</div><div style="font-size:16px;font-weight:700;margin-top:4px">${doc.id}</div><div style="font-size:12px;color:#666;margin-top:4px">Date : ${dfr(doc.date)}</div>${isF ? `<div style="font-size:11px;color:#666">Échéance : ${dfr(doc.echeance)}</div>` : ''}</div></div>
 <div style="background:#f0f7f2;border-radius:10px;padding:16px;margin-bottom:24px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#666;font-weight:700;margin-bottom:6px">Client</div><div style="font-size:15px;font-weight:700">${client?.nom||''}</div><div style="font-size:12px;color:#555;margin-top:2px">${client?.adresse||''}</div><div style="font-size:12px;color:#555">${client?.tel||''} — ${client?.email||''}</div></div>
 <table style="width:100%;border-collapse:collapse;margin-bottom:16px"><thead><tr style="background:#1B4332;color:#fff"><th style="padding:10px;text-align:left;font-size:11px;text-transform:uppercase;border-radius:8px 0 0 0">Description</th><th style="padding:10px;text-align:center;font-size:11px;text-transform:uppercase">Quantité</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase">Prix unit.</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase;border-radius:0 8px 0 0">Total HT</th></tr></thead><tbody>${lignesHtml}</tbody></table>
 <div style="display:flex;justify-content:flex-end"><div style="width:260px"><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT</span><span style="font-weight:600">${fmt(brut)}</span></div>${remise > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#b91c1c"><span>Remise</span><span>−${fmt(remise)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT net</span><span style="font-weight:600">${fmt(ht)}</span></div>` : ''}<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#666"><span>TVA (${tv}%)</span><span>${fmt(tva)}</span></div><div style="display:flex;justify-content:space-between;padding:10px 0;font-size:20px;font-weight:800;color:#1B4332;border-top:2px solid #1B4332;margin-top:4px"><span>Total TTC</span><span>${fmt(tot)}</span></div></div></div>
@@ -1297,7 +1329,15 @@ function openPrintablePDF(type, doc, client, signature, entreprise) {
 }
 
 /* ══════════════ PROFIL ENTREPRISE ══════════════ */
-function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5, audit = [], clotures = [], onCloture, onExport }) {
+function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, onUpgrade, onManage, devisMois = 0, facturesMois = 0, freeLimit = 5, audit = [], clotures = [], onCloture, onExport, onSaveLogo }) {
+  const logoRef = useRef(null);
+  const handleLogoFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => { const resized = await resizeLogo(reader.result); if (resized) onSaveLogo?.(resized); };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
   const anneeCourante = new Date().getFullYear();
   const anneePrec = anneeCourante - 1;
   const dejaCloture = (a) => clotures.some(c => c.annee === a);
@@ -1313,9 +1353,16 @@ function ProfilPage({ entreprise, onSave, onSignOut, plan, isPro, subscription, 
   return <div>
     <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Mon entreprise</div>
     <div className="fade-up" style={{ background: T.bgCard, borderRadius: T.radius, padding: 18, boxShadow: T.shadow, marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-        <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 22 }}>{(f.nom || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+        {entreprise?.logo_url
+          ? <div style={{ width: 56, height: 56, borderRadius: 14, background: "#fff", border: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}><img src={entreprise.logo_url} alt="Logo" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /></div>
+          : <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg, ${T.primary}, ${T.primaryLighter})`, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 22 }}>{(f.nom || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}</div>}
         <div><div style={{ fontSize: 18, fontWeight: 700 }}>{f.nom || "Mon Entreprise"}</div><div style={{ fontSize: 12, color: T.textMuted }}>SIRET {f.siret || "Non renseigné"}</div></div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input ref={logoRef} type="file" accept="image/*" onChange={handleLogoFile} style={{ display: "none" }} />
+        <button className="btn-press" onClick={() => logoRef.current?.click()} style={{ flex: 1, padding: "9px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgElevated, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🖼 {entreprise?.logo_url ? "Changer le logo" : "Ajouter un logo"}</button>
+        {entreprise?.logo_url && <button className="btn-press" onClick={() => onSaveLogo?.(null)} style={{ padding: "9px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, color: "#991B1B", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>Retirer</button>}
       </div>
       {[["nom","Nom de l'entreprise"],["siret","SIRET"],["adresse","Adresse complète"],["tel","Téléphone"],["email","Email"],["ape","Code APE"],["tva_intra","N° TVA Intracommunautaire"],["iban","IBAN (affiché sur vos factures)"]].map(([k, l]) => (
         <div key={k} style={{ marginBottom: 12 }}><label style={lS}>{l}</label><input className="search-glow" style={iS} value={f[k]} onChange={e => { setF({ ...f, [k]: e.target.value }); setSaved(false); }} placeholder={l} /></div>
@@ -1712,7 +1759,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b31</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b32</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1891,7 +1938,7 @@ export default function FactuPro() {
               fl("Export téléchargé ✓");
             } catch (e) { fl("Erreur: " + e.message); }
           }}
-          onUpgrade={startCheckout} onManage={openPortal} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
+          onUpgrade={startCheckout} onManage={openPortal} onSaveLogo={async (url) => { try { await updateEntreprise({ logo_url: url }); fl(url ? "Logo enregistré ✓" : "Logo retiré"); } catch (e) { fl("Erreur: " + e.message); } }} onSignOut={async () => { try { await signOut(); } catch(e) { window.location.reload(); } }} onSave={async (data) => { await updateEntreprise(data); fl("Profil enregistré ✓"); }} />}
       </div>
 
       {/* Nav */}
