@@ -322,6 +322,29 @@ export function useFactures(entrepriseId) {
 
   useEffect(() => { load() }, [load])
 
+  // Valide un brouillon : attribue le numéro et l'émet (devient inaltérable).
+  async function validerFacture(id) {
+    const { data: numData } = await supabase.rpc('prochain_numero', {
+      p_entreprise_id: entrepriseId, p_type: 'facture'
+    })
+    const { data, error } = await supabase
+      .from('factures')
+      .update({ numero: numData, statut: 'envoyee', date_facture: new Date().toISOString().slice(0, 10) })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    await load()
+    return data
+  }
+
+  // Supprime une facture brouillon (le trigger interdit la suppression d'une facture émise).
+  async function supprimerBrouillon(id) {
+    const { error } = await supabase.from('factures').delete().eq('id', id)
+    if (error) throw error
+    await load()
+  }
+
   async function creerDepuisDevis(devisData) {
     const { data: numData } = await supabase.rpc('prochain_numero', {
       p_entreprise_id: entrepriseId,
@@ -503,5 +526,5 @@ export function useFactures(entrepriseId) {
     await load()
   }
 
-  return { factures, loading, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, envoyerRelance, reload: load }
+  return { factures, loading, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance, reload: load }
 }

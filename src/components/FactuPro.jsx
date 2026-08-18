@@ -16,7 +16,8 @@ function normFacture(f) {
   if (statut === 'envoyee' && f.type !== 'avoir' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
     statut = 'en_retard';
   }
-  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+  const brouillon = f.statut === 'brouillon';
+  return { id: f.numero || (brouillon ? 'Brouillon' : ''), dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, brouillon, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, recurrenceId: f.recurrence_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
     relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
     lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: f };
@@ -558,7 +559,7 @@ const T = {
 
 /* ══════════════ SMALL COMPONENTS ══════════════ */
 function Badge({ statut }) {
-  const m = { en_attente:["En attente",T.accentPale,"#92400E",T.accent], accepte:["Accepté",T.primaryPale,"#065F46","#10B981"], refuse:["Refusé",T.dangerPale,"#991B1B",T.danger], payee:["Payée",T.primaryPale,"#065F46","#10B981"], en_retard:["En retard",T.dangerPale,"#991B1B",T.danger], envoyee:["Envoyée",T.infoPale,"#1E40AF",T.info], facture:["Facturé","#E0E7FF","#3730A3","#6366F1"], signe:["Signé",T.primaryPale,"#065F46","#10B981"] };
+  const m = { brouillon:["Brouillon","#F1F1EE","#666","#999"], en_attente:["En attente",T.accentPale,"#92400E",T.accent], accepte:["Accepté",T.primaryPale,"#065F46","#10B981"], refuse:["Refusé",T.dangerPale,"#991B1B",T.danger], payee:["Payée",T.primaryPale,"#065F46","#10B981"], en_retard:["En retard",T.dangerPale,"#991B1B",T.danger], envoyee:["Envoyée",T.infoPale,"#1E40AF",T.info], facture:["Facturé","#E0E7FF","#3730A3","#6366F1"], signe:["Signé",T.primaryPale,"#065F46","#10B981"] };
   const s = m[statut] || [statut,"#E5E7EB","#374151","#9CA3AF"];
   return <span style={{ background: s[1], color: s[2], padding: "4px 10px 4px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: s[3], flexShrink: 0 }} />{s[0]}</span>;
 }
@@ -780,7 +781,7 @@ function PayPicker({ onSel, onClose }) {
 /* ══════════════ PAGES ══════════════ */
 function Dashboard({ devis, factures, clients, onNav, onSelectDevis, onSelectFacture }) {
   const ca = factures.filter(f => f.statut === "payee").reduce((s, f) => s + ttc(f), 0);
-  const att = factures.filter(f => f.statut !== "payee").reduce((s, f) => s + ttc(f), 0);
+  const att = factures.filter(f => f.statut !== "payee" && !f.brouillon && f.type !== "avoir").reduce((s, f) => s + ttc(f), 0);
   const dc = devis.filter(d => d.statut === "en_attente").length;
   const ret = factures.filter(f => f.statut === "en_retard").length;
   const conv = devis.length > 0 ? Math.round(devis.filter(d => ["accepte", "facture"].includes(d.statut)).length / devis.length * 100) : 0;
@@ -996,10 +997,11 @@ function DevisForm({ clients, onSave, onNo, catalogue, init, mode }) {
   </div>;
 }
 
-function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir, onDup }) {
+function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir, onDup, onValider, onDelete }) {
   const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(facture);
   const p = PAIEMENTS.find(y => y.v === facture.paiement);
   const isAvoir = facture.type === "avoir";
+  const isBrouillon = facture.brouillon;
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
       <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
@@ -1040,13 +1042,21 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir
     </div>}
 
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-      {facture.statut !== "payee" && <button className="btn-press" onClick={() => onPay(facture.dbId)} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰 Marquer payée</button>}
-      <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
-      <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
-      {!isAvoir && <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>}
-      {!isAvoir && <button className="btn-press" onClick={onAvoir} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.accent}`, background: T.accentPale, color: "#92400E", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>↩ Créer un avoir</button>}
+      {isBrouillon ? <>
+        <button className="btn-press" onClick={onValider} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✅ Valider et émettre</button>
+        <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 Aperçu</button>
+        <button className="btn-press" onClick={onDelete} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, color: "#991B1B", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🗑 Supprimer</button>
+      </> : <>
+        {facture.statut !== "payee" && <button className="btn-press" onClick={() => onPay(facture.dbId)} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>💰 Marquer payée</button>}
+        <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
+        <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
+        {!isAvoir && <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>}
+        {!isAvoir && <button className="btn-press" onClick={onAvoir} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.accent}`, background: T.accentPale, color: "#92400E", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>↩ Créer un avoir</button>}
+      </>}
     </div>
-    {!isAvoir && <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>🔒 Facture émise — inaltérable. Pour corriger, créez un avoir.</div>}
+    {isBrouillon
+      ? <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>📝 Brouillon — non émis. Validez-le pour lui attribuer un numéro et le rendre définitif.</div>
+      : !isAvoir && <div style={{ marginTop: 10, fontSize: 11, color: T.textLight, display: "flex", alignItems: "center", gap: 6 }}>🔒 Facture émise — inaltérable. Pour corriger, créez un avoir.</div>}
   </div>;
 }
 
@@ -1091,7 +1101,7 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
   const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
   return <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div>
-    <Search v={q} set={setQ} /><Chips opts={[{ v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
+    <Search v={q} set={setQ} /><Chips opts={[{ v: "brouillon", l: "Brouillon" }, { v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
     {f.map(x => { const cl = clients.find(c => c.id === x.clientId); return <div key={x.id} className="card-hover" onClick={() => onSelect(x)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>{x.id}{x.type === "avoir" && <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "#FEF3C7", color: "#92400E" }}>AVOIR</span>}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
@@ -1114,8 +1124,8 @@ function ProLock({ titre, desc, onUpgrade }) {
 }
 
 function Relances({ factures, clients, onRelance, onPaid }) {
-  const ov = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) > 0);
-  const pe = factures.filter(f => f.type !== "avoir" && f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
+  const ov = factures.filter(f => f.type !== "avoir" && !f.brouillon && f.statut !== "payee" && dd(f.echeance, tod()) > 0);
+  const pe = factures.filter(f => f.type !== "avoir" && !f.brouillon && f.statut !== "payee" && dd(f.echeance, tod()) <= 0);
   return <div>
     <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 14 }}>Relances</div>
     {ov.map(f => { const cl = clients.find(c => c.id === f.clientId); return <div key={f.id} className="fade-up" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, borderLeft: `4px solid ${T.danger}` }}>
@@ -1581,7 +1591,7 @@ export default function FactuPro() {
   const { entreprise, signOut, updateEntreprise } = useAuth();
   const { clients: rawClients, addClient, updateClient } = useClients(entreprise?.id);
   const { devis: rawDevis, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
-  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
+  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
   const { entries: auditEntries } = useAudit(entreprise?.id);
@@ -1761,7 +1771,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b34</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b35</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1906,6 +1916,8 @@ export default function FactuPro() {
           onPay={id => setPayPick(id)}
           onAvoir={() => setAvoirModal(selF)}
           onDup={() => { if (!isPro && facturesMois >= FREE_LIMIT) { setConf({ m: `Limite atteinte : ${FREE_LIMIT} factures ce mois-ci en formule Gratuite. Passez à Pro pour un usage illimité.`, fn: () => nav("profil") }); return; } setDupF(selF); setSelF(null); setPg("nouvelle_facture"); }}
+          onValider={() => setConf({ m: `Valider et émettre cette facture ? Un numéro définitif lui sera attribué et elle deviendra inaltérable.`, fn: async () => { try { const v = await validerFacture(selF.dbId); setSelF(normFacture({ ...selF._raw, ...v, facture_lignes: selF._raw.facture_lignes })); fl("Facture émise ✓"); } catch (e) { fl("Erreur: " + e.message); } } })}
+          onDelete={() => setConf({ m: `Supprimer ce brouillon ?`, fn: async () => { try { await supprimerBrouillon(selF.dbId); setSelF(null); fl("Brouillon supprimé"); } catch (e) { fl("Erreur: " + e.message); } } })}
         />}
 
         {pg === "catalogue" && <CataloguePage catalogue={rawCat} onAdd={addCatItem} onUpdate={updateCatItem} onDelete={deleteCatItem} />}
