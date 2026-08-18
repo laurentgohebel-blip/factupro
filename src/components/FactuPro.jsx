@@ -435,19 +435,17 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent,
 
 /* ══════════════ CSV EXPORT ══════════════ */
 function exportCSV(factures, clients) {
-  const headers = ["Numéro", "Date", "Client", "Email client", "Montant HT", "TVA %", "Montant TVA", "Montant TTC", "Statut", "Mode paiement", "Date paiement", "Échéance"];
+  const headers = ["Numéro", "Date", "Client", "Email client", "Remise", "Montant HT", "TVA %", "Montant TVA", "Montant TTC", "Statut", "Mode paiement", "Date paiement", "Échéance"];
 
   const rows = factures.map(f => {
     const cl = clients.find(c => c.id === f.clientId);
-    const ht = tl(f.lignes);
-    const tv = f.tva || 10;
-    const tva = ht * tv / 100;
-    const tot = ht + tva;
+    const { remise, net: ht, tv, tva, ttc: tot } = totals(f);
     return [
       f.id,
       f.date,
       cl?.nom || "",
       cl?.email || "",
+      remise.toFixed(2),
       ht.toFixed(2),
       tv,
       tva.toFixed(2),
@@ -471,15 +469,14 @@ function exportCSV(factures, clients) {
 }
 
 function exportDevisCSV(devis, clients) {
-  const headers = ["Numéro", "Date", "Validité", "Client", "Email client", "Montant HT", "TVA %", "Montant TTC", "Statut"];
+  const headers = ["Numéro", "Date", "Validité", "Client", "Email client", "Remise", "Montant HT", "TVA %", "Montant TTC", "Statut"];
 
   const rows = devis.map(d => {
     const cl = clients.find(c => c.id === d.clientId);
-    const ht = tl(d.lignes);
-    const tv = d.tva || 10;
+    const { remise, net: ht, tv, ttc } = totals(d);
     return [
       d.id, d.date, d.validite || "", cl?.nom || "", cl?.email || "",
-      ht.toFixed(2), tv, (ht * (1 + tv / 100)).toFixed(2), d.statut,
+      remise.toFixed(2), ht.toFixed(2), tv, ttc.toFixed(2), d.statut,
     ];
   });
 
@@ -1715,7 +1712,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b30</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b31</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
