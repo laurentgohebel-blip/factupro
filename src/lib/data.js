@@ -170,6 +170,38 @@ export function useDevis(entrepriseId) {
     return data
   }
 
+  // Édition complète d'un devis (champs + lignes remplacées)
+  async function updateDevisComplet(id, devisData, lignes) {
+    const { error } = await supabase
+      .from('devis')
+      .update({
+        client_id: devisData.client_id,
+        date_validite: devisData.date_validite,
+        taux_tva: devisData.taux_tva,
+        type_operation: devisData.type_operation || 'services',
+        remise_type: devisData.remise_type || 'montant',
+        remise_valeur: devisData.remise_valeur || 0,
+        notes: devisData.notes || '',
+      })
+      .eq('id', id)
+    if (error) throw error
+
+    await supabase.from('devis_lignes').delete().eq('devis_id', id)
+    if (lignes?.length) {
+      await supabase.from('devis_lignes').insert(
+        lignes.map((l, i) => ({
+          devis_id: id,
+          description: l.description || l.desc,
+          quantite: l.quantite || l.qte,
+          unite: l.unite,
+          prix_unitaire: l.prix_unitaire || l.pu,
+          ordre: i,
+        }))
+      )
+    }
+    await load()
+  }
+
   async function deleteDevis(id) {
     await supabase.from('devis').delete().eq('id', id)
     setDevis(prev => prev.filter(d => d.id !== id))
@@ -182,7 +214,7 @@ export function useDevis(entrepriseId) {
     })
   }
 
-  return { devis, loading, addDevis, updateDevis, deleteDevis, signerDevis, reload: load }
+  return { devis, loading, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, reload: load }
 }
 
 // ─── Abonnement (Stripe) ───

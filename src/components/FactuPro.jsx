@@ -875,7 +875,7 @@ function DevisList({ devis, clients, onSelect, onNew }) {
   </div>;
 }
 
-function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink, onRefresh }) {
+function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink, onRefresh, onEdit }) {
   const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(devis);
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
@@ -907,13 +907,14 @@ function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF
       {!devis.signature && devis.statut !== "facture" && devis.statut !== "refuse" && <button className="btn-press" onClick={onSendSignLink} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: "none", background: "#0EA5E9", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🔗 Lien de signature</button>}
       <button className="btn-press" onClick={onPDF} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📄 PDF</button>
       <button className="btn-press" onClick={onEmail} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✉ Envoyer</button>
+      {devis.statut === "en_attente" && <button className="btn-press" onClick={onEdit} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✏ Modifier</button>}
       <button className="btn-press" onClick={onDup} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Dupliquer</button>
       <button className="btn-press" onClick={onDelete} style={{ padding: "9px 14px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: "#991B1B" }}>🗑</button>
     </div>
   </div>;
 }
 
-function DevisForm({ clients, onSave, onNo, catalogue, init }) {
+function DevisForm({ clients, onSave, onNo, catalogue, init, mode }) {
   const [cId, setCId] = useState(init?.clientId || clients[0]?.id || "");
   const [ls, setLs] = useState(init?.lignes?.map(l => ({ ...l })) || [{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
   const [tv, setTv] = useState(init?.tva || 10);
@@ -927,7 +928,7 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
   const inputStyle = { width: "100%", padding: "8px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, fontWeight: 600, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
 
   return <div>
-    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{init ? "Dupliquer" : "Nouveau devis"}</h2></div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{mode === "edit" ? "Modifier le devis" : (init ? "Dupliquer" : "Nouveau devis")}</h2></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={{ ...inputStyle, fontWeight: 400 }} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Type d'opération</label><Chips opts={[{ v: "services", l: "Services" }, { v: "biens", l: "Biens" }, { v: "mixte", l: "Mixte" }]} val={typeOp} set={setTypeOp} /></div>
@@ -961,7 +962,7 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
       </>; })()}
     </div>
     <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions particulières, délais, remarques..." /></div>
-    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, remiseType, remiseValeur, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
+    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, remiseType, remiseValeur, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : mode === "edit" ? "Enregistrer les modifications" : "Créer le devis"}</button>
     {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
   </div>;
 }
@@ -1534,7 +1535,7 @@ const NAV_ITEMS = [
 export default function FactuPro() {
   const { entreprise, signOut, updateEntreprise } = useAuth();
   const { clients: rawClients, addClient, updateClient } = useClients(entreprise?.id);
-  const { devis: rawDevis, addDevis, updateDevis, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
+  const { devis: rawDevis, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
   const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, envoyerRelance } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
@@ -1557,14 +1558,15 @@ export default function FactuPro() {
   const [pdf, setPdf] = useState(null);
   const [conf, setConf] = useState(null);
   const [dup, setDup] = useState(null);
+  const [editD, setEditD] = useState(null);
   const [toast, setToast] = useState(null);
   const [payPick, setPayPick] = useState(null);
   const [emailModal, setEmailModal] = useState(null); // { type, doc, client, signature }
   const [avoirModal, setAvoirModal] = useState(null); // facture sélectionnée pour avoir
 
   const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
-  const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); };
-  const tab = ["nouveau_devis","nouvelle_facture"].includes(pg) ? pg === "nouveau_devis" ? "devis" : "factures" : pg;
+  const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); setEditD(null); };
+  const tab = ["nouveau_devis","nouvelle_facture","edit_devis"].includes(pg) ? pg === "nouvelle_facture" ? "factures" : "devis" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
   // ── Quota formule Gratuite : 5 devis + 5 factures / mois (illimité en Pro) ──
@@ -1713,7 +1715,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b29</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b30</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1747,6 +1749,7 @@ export default function FactuPro() {
           onPDF={() => setPdf({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature, entreprise })}
           onEmail={() => setEmailModal({ type: "devis", doc: selD, client: cls.find(c => c.id === selD.clientId), signature: selD.signature })}
           onDup={() => { if (!isPro && devisMois >= FREE_LIMIT) { setConf({ m: `Limite atteinte : ${FREE_LIMIT} devis ce mois-ci en formule Gratuite. Passez à Pro pour un usage illimité.`, fn: () => nav("profil") }); return; } setDup(selD); setSelD(null); setPg("nouveau_devis"); }}
+          onEdit={() => { setEditD(selD); setSelD(null); setPg("edit_devis"); }}
           onConvert={async () => {
             fl("Création de la facture…");
             try {
@@ -1810,6 +1813,20 @@ export default function FactuPro() {
                 d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
               );
               setDup(null); nav("devis"); fl("Devis créé ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+        />}
+
+        {pg === "edit_devis" && editD && <DevisForm clients={cls} catalogue={cat} init={editD} mode="edit"
+          onNo={() => { setEditD(null); nav("devis"); }}
+          onSave={async d => {
+            try {
+              await updateDevisComplet(
+                editD.dbId,
+                { client_id: d.clientId, date_validite: editD.validite, taux_tva: d.tva, type_operation: d.typeOp, remise_type: d.remiseType, remise_valeur: d.remiseValeur, notes: d.notes },
+                d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
+              );
+              setEditD(null); nav("devis"); fl("Devis modifié ✓");
             } catch (e) { fl("Erreur: " + e.message); }
           }}
         />}
