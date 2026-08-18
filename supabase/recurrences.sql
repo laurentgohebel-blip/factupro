@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS recurrences (
   date_fin DATE,                                  -- fin par date (NULL = pas de date de fin définie)
   prochaine_generation DATE NOT NULL,
   statut TEXT NOT NULL DEFAULT 'active',          -- active | en_pause | terminee
+  auto_envoi BOOLEAN DEFAULT false,               -- true = émise + envoyée ; false = brouillon à valider
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE recurrences ADD COLUMN IF NOT EXISTS auto_envoi BOOLEAN DEFAULT false;
 
 ALTER TABLE recurrences ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "own recurrences" ON recurrences;

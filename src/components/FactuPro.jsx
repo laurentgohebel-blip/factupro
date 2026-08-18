@@ -1110,6 +1110,7 @@ function RecurrenceForm({ clients, catalogue, onSave, onNo, init }) {
   const [frequence, setFrequence] = useState(init?.frequence || "mensuelle");
   const [dateDebut, setDateDebut] = useState(init?.date_debut || tod());
   const [dateFin, setDateFin] = useState(init?.date_fin || "");
+  const [autoEnvoi, setAutoEnvoi] = useState(init?.auto_envoi || false);
   const [showC, setShowC] = useState(false);
   const [saving, setSaving] = useState(false);
   const uL = (i, k, v) => { const n = [...ls]; n[i] = { ...n[i], [k]: k === "qte" || k === "pu" ? parseFloat(v) || 0 : v }; setLs(n); };
@@ -1143,6 +1144,10 @@ function RecurrenceForm({ clients, catalogue, onSave, onNo, init }) {
     </div>)}
     <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 12 }}>+ Ajouter une ligne</button>
     <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Délai de paiement (jours)</label><input className="search-glow" style={iS} type="number" value={delai} onChange={e => setDelai(parseInt(e.target.value) || 0)} /></div>
+    <label style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 14px", background: T.bgElevated, borderRadius: T.radiusSm, marginBottom: 12, cursor: "pointer" }}>
+      <input type="checkbox" checked={autoEnvoi} onChange={e => setAutoEnvoi(e.target.checked)} style={{ width: 16, height: 16, accentColor: T.primary, marginTop: 1 }} />
+      <span><span style={{ fontSize: 13, fontWeight: 600 }}>Envoyer automatiquement au client</span><br/><span style={{ fontSize: 11, color: T.textMuted }}>La facture est émise et envoyée par email directement (sans passer par le brouillon). Sinon, un brouillon est créé à valider.</span></span>
+    </label>
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
       {(() => { const t = totals({ lignes: ls, tva: tv, remiseType, remiseValeur }); return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 16, fontWeight: 800, color: T.primary }}><span>TTC / échéance</span><span>{fmt(t.ttc)}</span></div>; })()}
     </div>
@@ -1153,7 +1158,7 @@ function RecurrenceForm({ clients, catalogue, onSave, onNo, init }) {
         client_id: cId, libelle,
         lignes: vl.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu })),
         taux_tva: tv, type_operation: typeOp, remise_type: remiseType, remise_valeur: remiseValeur,
-        delai_echeance: delai, frequence, date_debut: dateDebut, date_fin: dateFin || null,
+        delai_echeance: delai, frequence, date_debut: dateDebut, date_fin: dateFin || null, auto_envoi: autoEnvoi,
       });
       setSaving(false);
     }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font }}>{saving ? "Enregistrement..." : (init ? "Enregistrer" : "Créer la récurrence")}</button>
@@ -1178,7 +1183,7 @@ function RecurrencesList({ recurrences, clients, factures, onNew, onEdit, onTogg
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>{r.libelle || cl?.nom || "Récurrence"}</div>
-            <div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom} · {freqLabel(r.frequence)}</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom} · {freqLabel(r.frequence)} · {r.auto_envoi ? "✉ Auto-envoi" : "📝 Brouillon"}</div>
             <div style={{ fontSize: 11, color: T.textLight, marginTop: 2 }}>{r.statut === "terminee" ? "Terminée" : `Prochaine : ${dfr(r.prochaine_generation)}`}{r.date_fin ? ` · Fin : ${dfr(r.date_fin)}` : ""} · {nbGen} générée(s)</div>
           </div>
           <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: st[1], color: st[2], whiteSpace: "nowrap" }}>{st[0]}</span>
@@ -1870,7 +1875,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b36</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b37</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
