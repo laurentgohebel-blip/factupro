@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 function normClient(c) { return c; } // same format
 function normCat(c) { return { id: c.id, cat: c.categorie, desc: c.description, unite: c.unite, pu: parseFloat(c.prix_unitaire) }; }
 function normDevis(d) {
-  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), typeOp: d.type_operation || 'services', notes: d.notes || '',
+  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), typeOp: d.type_operation || 'services', remiseType: d.remise_type || 'montant', remiseValeur: parseFloat(d.remise_valeur) || 0, notes: d.notes || '',
     lignes: (d.devis_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: d };
 }
@@ -16,7 +16,7 @@ function normFacture(f) {
   if (statut === 'envoyee' && f.type !== 'avoir' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
     statut = 'en_retard';
   }
-  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+  return { id: f.numero, dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
     relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
     lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: f };
@@ -42,7 +42,23 @@ const dfr = (d) => new Date(d).toLocaleDateString("fr-FR");
 const dd = (a, b) => Math.floor((new Date(b) - new Date(a)) / 86400000);
 const tod = () => new Date().toISOString().slice(0, 10);
 const in30 = () => new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-const ttc = (doc) => tl(doc.lignes) * (1 + (doc.tva || 10) / 100);
+// Remise (sur le total HT) : montant fixe ou pourcentage.
+const remiseOf = (doc) => {
+  const brut = tl(doc.lignes);
+  const v = parseFloat(doc.remiseValeur) || 0;
+  const r = doc.remiseType === "pourcent" ? brut * v / 100 : v;
+  return Math.min(Math.max(r, 0), brut);
+};
+// Totaux d'un document en tenant compte de la remise.
+const totals = (doc) => {
+  const brut = tl(doc.lignes);
+  const remise = remiseOf(doc);
+  const net = brut - remise;
+  const tv = doc.tva || 10;
+  const tva = net * tv / 100;
+  return { brut, remise, net, tv, tva, ttc: net + tva };
+};
+const ttc = (doc) => totals(doc).ttc;
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
@@ -86,7 +102,7 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   const e = entreprise || {};
   const isF = type === 'facture';
   const ti = doc.type === 'avoir' ? 'AVOIR' : (isF ? 'FACTURE' : 'DEVIS');
-  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc);
   const money = n => (n || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\s/g, ' ').replace(/[  ]/g, ' ') + ' €';
   const GREEN = [27, 67, 50];
 
@@ -160,16 +176,23 @@ async function generatePDFAttachment(type, doc, client, entreprise) {
   y += 5;
 
   // ── Totaux ──
-  ensure(24);
+  ensure(remise > 0 ? 34 : 24);
   const tx = PW - M - 70;
   pdf.setFontSize(9); pdf.setTextColor(70);
-  pdf.text('Total HT', tx, y + 4); pdf.text(money(ht), PW - M, y + 4, { align: 'right' });
-  pdf.text(`TVA (${tv}%)`, tx, y + 9); pdf.text(money(tva), PW - M, y + 9, { align: 'right' });
-  pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.5); pdf.line(tx, y + 12, PW - M, y + 12);
+  let ry = y + 4;
+  pdf.text('Total HT', tx, ry); pdf.text(money(brut), PW - M, ry, { align: 'right' }); ry += 5;
+  if (remise > 0) {
+    pdf.setTextColor(185, 28, 28);
+    pdf.text('Remise', tx, ry); pdf.text('-' + money(remise), PW - M, ry, { align: 'right' }); ry += 5;
+    pdf.setTextColor(70);
+    pdf.text('Total HT net', tx, ry); pdf.text(money(ht), PW - M, ry, { align: 'right' }); ry += 5;
+  }
+  pdf.text(`TVA (${tv}%)`, tx, ry); pdf.text(money(tva), PW - M, ry, { align: 'right' }); ry += 3;
+  pdf.setDrawColor(...GREEN); pdf.setLineWidth(0.5); pdf.line(tx, ry, PW - M, ry); ry += 7;
   pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13); pdf.setTextColor(...GREEN);
-  pdf.text('Total TTC', tx, y + 19); pdf.text(money(tot), PW - M, y + 19, { align: 'right' });
+  pdf.text('Total TTC', tx, ry); pdf.text(money(tot), PW - M, ry, { align: 'right' });
   pdf.setFont('helvetica', 'normal'); pdf.setLineWidth(0.2);
-  y += 28;
+  y = ry + 9;
 
   // ── Notes ──
   if (doc.notes) {
@@ -215,18 +238,15 @@ function defaultMessage(type, doc, client, entreprise) {
   const isR = type === "relance";
   const e = entreprise || {};
   const nom = client?.nom || "";
-  if (isR) return `Bonjour ${nom},\n\nSauf erreur de notre part, la facture ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC reste impayée à ce jour.\n\nNous vous remercions de bien vouloir régulariser cette situation dans les meilleurs délais.\n\nN'hésitez pas à nous contacter si vous avez des questions.\n\nCordialement,\n${e.nom || ""}`;
-  if (isF) return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre facture ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC.\n\nMerci de procéder au règlement avant le ${dfr(doc.echeance)}.\n\nCordialement,\n${e.nom || ""}`;
-  return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre devis ${doc.id} d'un montant de ${fmt(tl(doc.lignes) * (1 + (doc.tva || 10) / 100))} TTC.\n\nCe devis est valable jusqu'au ${dfr(doc.validite)}. N'hésitez pas à nous contacter pour toute question.\n\nCordialement,\n${e.nom || ""}`;
+  if (isR) return `Bonjour ${nom},\n\nSauf erreur de notre part, la facture ${doc.id} d'un montant de ${fmt(ttc(doc))} TTC reste impayée à ce jour.\n\nNous vous remercions de bien vouloir régulariser cette situation dans les meilleurs délais.\n\nN'hésitez pas à nous contacter si vous avez des questions.\n\nCordialement,\n${e.nom || ""}`;
+  if (isF) return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre facture ${doc.id} d'un montant de ${fmt(ttc(doc))} TTC.\n\nMerci de procéder au règlement avant le ${dfr(doc.echeance)}.\n\nCordialement,\n${e.nom || ""}`;
+  return `Bonjour ${nom},\n\nVeuillez trouver ci-dessous votre devis ${doc.id} d'un montant de ${fmt(ttc(doc))} TTC.\n\nCe devis est valable jusqu'au ${dfr(doc.validite)}. N'hésitez pas à nous contacter pour toute question.\n\nCordialement,\n${e.nom || ""}`;
 }
 
 function buildEmailHtml(type, doc, client, entreprise, customMessage) {
   const isF = type === "facture";
   const ti = doc.type === "avoir" ? "Avoir" : (isF ? "Facture" : "Devis");
-  const ht = tl(doc.lignes);
-  const tv = doc.tva || 10;
-  const tva = ht * tv / 100;
-  const tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc);
   const e = entreprise || {};
   const ibanBlock = e.iban ? `<tr><td style="padding:6px 0;color:#666;font-size:13px">IBAN</td><td style="padding:6px 0;font-weight:600;font-size:13px">${e.iban}</td></tr>` : "";
 
@@ -279,7 +299,8 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
     <!-- Totaux -->
     <div style="display:flex;justify-content:flex-end;margin-bottom:20px">
       <table style="width:220px">
-        <tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(ht)}</td></tr>
+        <tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(brut)}</td></tr>
+        ${remise > 0 ? `<tr><td style="padding:4px 0;font-size:13px;color:#b91c1c">Remise</td><td style="padding:4px 0;font-size:13px;text-align:right;color:#b91c1c">−${fmt(remise)}</td></tr><tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT net</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(ht)}</td></tr>` : ''}
         <tr><td style="padding:4px 0;font-size:13px;color:#666">TVA (${tv}%)</td><td style="padding:4px 0;font-size:13px;text-align:right;color:#666">${fmt(tva)}</td></tr>
         <tr style="border-top:2px solid #1B4332"><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332">Total TTC</td><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332;text-align:right">${fmt(tot)}</td></tr>
       </table>
@@ -311,8 +332,7 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
 function buildEmailContent(type, doc, client, entreprise) {
   const isF = type === "facture";
   const ti = doc.type === "avoir" ? "Avoir" : (isF ? "Facture" : "Devis");
-  const ht = tl(doc.lignes);
-  const tv = doc.tva || 10;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc);
   const e = entreprise || {};
   const ibanLine = e.iban ? `\nIBAN : ${e.iban}` : "";
   const subject = `${ti} ${doc.id} — ${e.nom || "FactuPro"}`;
@@ -325,9 +345,9 @@ Veuillez trouver en pièce jointe votre ${ti.toLowerCase()} ${doc.id} du ${dfr(d
 
 ${lignesText}
 
-Total HT : ${fmt(ht)}
-TVA (${tv}%) : ${fmt(ht * tv / 100)}
-Total TTC : ${fmt(ht * (1 + tv / 100))}
+Total HT : ${fmt(brut)}${remise > 0 ? `\nRemise : -${fmt(remise)}\nTotal HT net : ${fmt(ht)}` : ""}
+TVA (${tv}%) : ${fmt(tva)}
+Total TTC : ${fmt(tot)}
 
 ${isF ? `Date d'échéance : ${dfr(doc.echeance)}\nMerci de procéder au règlement dans les délais.${ibanLine}` : `Ce devis est valable jusqu'au ${dfr(doc.validite)}.`}
 
@@ -660,7 +680,7 @@ function SigPad({ onSave, onNo }) {
 }
 
 function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
-  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva, isF = type === "facture", ti = doc.type === "avoir" ? "AVOIR" : (isF ? "FACTURE" : "DEVIS");
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc), isF = type === "facture", ti = doc.type === "avoir" ? "AVOIR" : (isF ? "FACTURE" : "DEVIS");
   const e = entreprise || {};
   return <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, overflowY: "auto", padding: "16px 8px", animation: "fadeIn .2s" }}>
     <div style={{ background: "#fff", width: "100%", maxWidth: 480, margin: "0 auto", borderRadius: T.radius, overflow: "hidden", boxShadow: T.shadowLg }}>
@@ -692,7 +712,9 @@ function PDFPrev({ type, doc, client, signature, onClose, entreprise }) {
           <tbody>{doc.lignes.map((l, i) => <tr key={i} style={{ borderBottom: `1px solid ${T.borderLight}` }}><td style={{ padding: 5 }}>{l.desc}</td><td style={{ padding: 5, textAlign: "center" }}>{l.qte} {l.unite}</td><td style={{ padding: 5, textAlign: "right" }}>{fmt(l.pu)}</td><td style={{ padding: 5, textAlign: "right", fontWeight: 600 }}>{fmt(l.qte * l.pu)}</td></tr>)}</tbody>
         </table>
         <div style={{ display: "flex", justifyContent: "flex-end" }}><div style={{ width: 170 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(brut)}</span></div>
+          {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: T.danger }}><span>Remise</span><span>−{fmt(remise)}</span></div>}
+          {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}><span>HT net</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "#888" }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
           <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 15, fontWeight: 800, color: T.primary, borderTop: `2px solid ${T.primary}`, marginTop: 3 }}><span>TTC</span><span>{fmt(tot)}</span></div>
         </div></div>
@@ -854,7 +876,7 @@ function DevisList({ devis, clients, onSelect, onNew }) {
 }
 
 function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF, onDup, onEmail, onViewFacture, onSendSignLink, onRefresh }) {
-  const ht = tl(devis.lignes), tv = devis.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(devis);
   return <div>
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
       <button className="btn-press" onClick={onBack} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button>
@@ -869,7 +891,9 @@ function DevisDetail({ devis, client, onBack, onConvert, onDelete, onSign, onPDF
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 16, boxShadow: T.shadow, marginBottom: 10 }}>
       {devis.lignes.map((l, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: i < devis.lignes.length - 1 ? `1px solid ${T.borderLight}` : "none" }}><div><div style={{ fontSize: 13, fontWeight: 500 }}>{l.desc}</div><div style={{ fontSize: 11, color: T.textMuted }}>{l.qte} {l.unite} × {fmt(l.pu)}</div></div><div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(l.qte * l.pu)}</div></div>)}
       <div style={{ borderTop: `2px solid ${T.primary}`, marginTop: 8, paddingTop: 8 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(brut)}</span></div>
+        {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, color: T.danger }}><span>Remise</span><span>−{fmt(remise)}</span></div>}
+        {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT net</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>}
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textMuted }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary, marginTop: 4 }}><span>TTC</span><span>{fmt(tot)}</span></div>
       </div>
@@ -894,6 +918,8 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
   const [ls, setLs] = useState(init?.lignes?.map(l => ({ ...l })) || [{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
   const [tv, setTv] = useState(init?.tva || 10);
   const [typeOp, setTypeOp] = useState(init?.typeOp || "services");
+  const [remiseType, setRemiseType] = useState(init?.remiseType || "montant");
+  const [remiseValeur, setRemiseValeur] = useState(init?.remiseValeur || 0);
   const [notes, setNotes] = useState(init?.notes || "");
   const [showC, setShowC] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -919,17 +945,29 @@ function DevisForm({ clients, onSave, onNo, catalogue, init }) {
       </div>
     </div>)}
     <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 14 }}>+ Ajouter une ligne</button>
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Remise (optionnel)</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Chips opts={[{ v: "montant", l: "€" }, { v: "pourcent", l: "%" }]} val={remiseType} set={setRemiseType} />
+        <input className="search-glow" style={{ ...inputStyle, fontWeight: 400, width: 110 }} type="number" min="0" value={remiseValeur} onChange={e => setRemiseValeur(parseFloat(e.target.value) || 0)} />
+      </div>
+    </div>
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(tl(ls) * (1 + tv / 100))}</span></div>
+      {(() => { const t = totals({ lignes: ls, tva: tv, remiseType, remiseValeur }); return <>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.textMuted, marginBottom: 2 }}><span>Total HT</span><span>{fmt(t.brut)}</span></div>
+        {t.remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.danger, marginBottom: 2 }}><span>Remise</span><span>−{fmt(t.remise)}</span></div>}
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.textMuted, marginBottom: 4 }}><span>TVA {t.tv}%</span><span>{fmt(t.tva)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(t.ttc)}</span></div>
+      </>; })()}
     </div>
     <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions particulières, délais, remarques..." /></div>
-    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
+    <button className="btn-press" disabled={saving} onClick={async () => { const vl = ls.filter(l => l.desc.trim()); if (!vl.length) return; setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, remiseType, remiseValeur, lignes: vl, notes }); setSaving(false); }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer le devis"}</button>
     {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
   </div>;
 }
 
 function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir }) {
-  const ht = tl(facture.lignes), tv = facture.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(facture);
   const p = PAIEMENTS.find(y => y.v === facture.paiement);
   const isAvoir = facture.type === "avoir";
   return <div>
@@ -959,7 +997,9 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir
         <div style={{ fontWeight: 700, fontSize: 13 }}>{fmt(l.qte * l.pu)}</div>
       </div>)}
       <div style={{ borderTop: `2px solid ${T.primary}`, marginTop: 8, paddingTop: 8 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT</span><span style={{ fontWeight: 600 }}>{fmt(brut)}</span></div>
+        {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, color: T.danger }}><span>Remise</span><span>−{fmt(remise)}</span></div>}
+        {remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span>HT net</span><span style={{ fontWeight: 600 }}>{fmt(ht)}</span></div>}
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textMuted }}><span>TVA {tv}%</span><span>{fmt(tva)}</span></div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary, marginTop: 4 }}><span>TTC</span><span>{fmt(tot)}</span></div>
       </div>
@@ -980,7 +1020,7 @@ function FactureDetail({ facture, client, onBack, onPDF, onEmail, onPay, onAvoir
 }
 
 function AvoirModal({ facture, onClose, onConfirm }) {
-  const ht = tl(facture.lignes), tv = facture.tva || 10, totTtc = ht * (1 + tv / 100);
+  const _t = totals(facture), ht = _t.net, tv = _t.tv, totTtc = _t.ttc;
   const [mode, setMode] = useState("total"); // total | custom
   const [montant, setMontant] = useState(ht.toFixed(2));
   const [motif, setMotif] = useState("");
@@ -1109,10 +1149,7 @@ function Analytics({ factures, devis, clients, onExportFactures, onExportDevis }
 
 function generateFacturXml(doc, client, ent) {
   const e = ent || {};
-  const ht = tl(doc.lignes);
-  const tv = doc.tva || 10;
-  const tva = ht * tv / 100;
-  const tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc);
   const dateXml = (doc.date || tod()).replace(/-/g, "");
   const echeanceXml = (doc.echeance || in30()).replace(/-/g, "");
 
@@ -1173,6 +1210,12 @@ function generateFacturXml(doc, client, ent) {
       <ram:SpecifiedTradePaymentTerms>
         <ram:DueDateDateTime><udt:DateTimeString format="102">${echeanceXml}</udt:DateTimeString></ram:DueDateDateTime>
       </ram:SpecifiedTradePaymentTerms>
+      ${remise > 0 ? `<ram:SpecifiedTradeAllowanceCharge>
+        <ram:ChargeIndicator><udt:Indicator>false</udt:Indicator></ram:ChargeIndicator>
+        <ram:ActualAmount>${remise.toFixed(2)}</ram:ActualAmount>
+        <ram:Reason>Remise</ram:Reason>
+        <ram:CategoryTradeTax><ram:TypeCode>VAT</ram:TypeCode><ram:CategoryCode>S</ram:CategoryCode><ram:RateApplicablePercent>${tv}</ram:RateApplicablePercent></ram:CategoryTradeTax>
+      </ram:SpecifiedTradeAllowanceCharge>` : ''}
       <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>${tva.toFixed(2)}</ram:CalculatedAmount>
         <ram:TypeCode>VAT</ram:TypeCode>
@@ -1181,7 +1224,8 @@ function generateFacturXml(doc, client, ent) {
         <ram:RateApplicablePercent>${tv}</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
       <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
-        <ram:LineTotalAmount>${ht.toFixed(2)}</ram:LineTotalAmount>
+        <ram:LineTotalAmount>${brut.toFixed(2)}</ram:LineTotalAmount>
+        <ram:AllowanceTotalAmount>${remise.toFixed(2)}</ram:AllowanceTotalAmount>
         <ram:TaxBasisTotalAmount>${ht.toFixed(2)}</ram:TaxBasisTotalAmount>
         <ram:TaxTotalAmount currencyID="EUR">${tva.toFixed(2)}</ram:TaxTotalAmount>
         <ram:GrandTotalAmount>${tot.toFixed(2)}</ram:GrandTotalAmount>
@@ -1205,7 +1249,7 @@ function downloadFacturX(doc, client, entreprise) {
 }
 
 function generatePDFHtml(type, doc, client, signature, ent) {
-  const ht = tl(doc.lignes), tv = doc.tva || 10, tva = ht * tv / 100, tot = ht + tva;
+  const { brut, remise, net: ht, tv, tva, ttc: tot } = totals(doc);
   const isF = type === "facture", ti = doc.type === "avoir" ? "AVOIR" : (isF ? "FACTURE" : "DEVIS");
   const e = ent || {};
   const lignesHtml = doc.lignes.map(l => `<tr style="border-bottom:1px solid #eee"><td style="padding:10px 8px;font-size:13px">${l.desc}</td><td style="padding:10px 8px;text-align:center;font-size:13px">${l.qte} ${l.unite}</td><td style="padding:10px 8px;text-align:right;font-size:13px">${fmt(l.pu)}</td><td style="padding:10px 8px;text-align:right;font-weight:600;font-size:13px">${fmt(l.qte * l.pu)}</td></tr>`).join("");
@@ -1240,7 +1284,7 @@ function generatePDFHtml(type, doc, client, signature, ent) {
 <div style="display:flex;justify-content:space-between;margin-bottom:30px"><div><div style="font-size:28px;font-weight:800;color:#1B4332">⚡ FactuPro</div><div style="font-size:14px;font-weight:700;margin-top:4px">${e.nom||''}</div><div style="font-size:11px;color:#666;margin-top:2px">${e.adresse||''}</div><div style="font-size:11px;color:#666">Tél : ${e.tel||''} — ${e.email||''}</div><div style="font-size:10px;color:#999;margin-top:4px">SIRET : ${e.siret||''} — APE : ${e.ape||''} — TVA Intra : ${e.tva_intra||''}</div></div><div style="text-align:right"><div style="font-size:24px;font-weight:800;color:#1B4332;letter-spacing:2px">${ti}</div><div style="font-size:16px;font-weight:700;margin-top:4px">${doc.id}</div><div style="font-size:12px;color:#666;margin-top:4px">Date : ${dfr(doc.date)}</div>${isF ? `<div style="font-size:11px;color:#666">Échéance : ${dfr(doc.echeance)}</div>` : ''}</div></div>
 <div style="background:#f0f7f2;border-radius:10px;padding:16px;margin-bottom:24px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#666;font-weight:700;margin-bottom:6px">Client</div><div style="font-size:15px;font-weight:700">${client?.nom||''}</div><div style="font-size:12px;color:#555;margin-top:2px">${client?.adresse||''}</div><div style="font-size:12px;color:#555">${client?.tel||''} — ${client?.email||''}</div></div>
 <table style="width:100%;border-collapse:collapse;margin-bottom:16px"><thead><tr style="background:#1B4332;color:#fff"><th style="padding:10px;text-align:left;font-size:11px;text-transform:uppercase;border-radius:8px 0 0 0">Description</th><th style="padding:10px;text-align:center;font-size:11px;text-transform:uppercase">Quantité</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase">Prix unit.</th><th style="padding:10px;text-align:right;font-size:11px;text-transform:uppercase;border-radius:0 8px 0 0">Total HT</th></tr></thead><tbody>${lignesHtml}</tbody></table>
-<div style="display:flex;justify-content:flex-end"><div style="width:260px"><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT</span><span style="font-weight:600">${fmt(ht)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#666"><span>TVA (${tv}%)</span><span>${fmt(tva)}</span></div><div style="display:flex;justify-content:space-between;padding:10px 0;font-size:20px;font-weight:800;color:#1B4332;border-top:2px solid #1B4332;margin-top:4px"><span>Total TTC</span><span>${fmt(tot)}</span></div></div></div>
+<div style="display:flex;justify-content:flex-end"><div style="width:260px"><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT</span><span style="font-weight:600">${fmt(brut)}</span></div>${remise > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#b91c1c"><span>Remise</span><span>−${fmt(remise)}</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>Total HT net</span><span style="font-weight:600">${fmt(ht)}</span></div>` : ''}<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#666"><span>TVA (${tv}%)</span><span>${fmt(tva)}</span></div><div style="display:flex;justify-content:space-between;padding:10px 0;font-size:20px;font-weight:800;color:#1B4332;border-top:2px solid #1B4332;margin-top:4px"><span>Total TTC</span><span>${fmt(tot)}</span></div></div></div>
 ${notesHtml}${sigHtml}${mentionsObligatoires}
 <div class="no-print" style="text-align:center;margin-top:40px"><button onclick="window.print()" style="background:#1B4332;color:#fff;border:none;padding:14px 32px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif">📄 Imprimer / Enregistrer en PDF</button></div>
 </body></html>`;
@@ -1421,6 +1465,8 @@ function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
   const [ls, setLs] = useState([{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
   const [tv, setTv] = useState(20);
   const [typeOp, setTypeOp] = useState("services");
+  const [remiseType, setRemiseType] = useState("montant");
+  const [remiseValeur, setRemiseValeur] = useState(0);
   const [notes, setNotes] = useState("");
   const [echeance, setEcheance] = useState(in30());
   const [showC, setShowC] = useState(false);
@@ -1451,13 +1497,25 @@ function FactureDirecteForm({ clients, catalogue, onSave, onNo }) {
       </div>
     </div>)}
     <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 14 }}>+ Ajouter une ligne</button>
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Remise (optionnel)</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <Chips opts={[{ v: "montant", l: "€" }, { v: "pourcent", l: "%" }]} val={remiseType} set={setRemiseType} />
+        <input className="search-glow" style={{ ...inputStyle, fontWeight: 400, width: 110 }} type="number" min="0" value={remiseValeur} onChange={e => setRemiseValeur(parseFloat(e.target.value) || 0)} />
+      </div>
+    </div>
     <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(tl(ls) * (1 + tv / 100))}</span></div>
+      {(() => { const t = totals({ lignes: ls, tva: tv, remiseType, remiseValeur }); return <>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.textMuted, marginBottom: 2 }}><span>Total HT</span><span>{fmt(t.brut)}</span></div>
+        {t.remise > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.danger, marginBottom: 2 }}><span>Remise</span><span>−{fmt(t.remise)}</span></div>}
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.textMuted, marginBottom: 4 }}><span>TVA {t.tv}%</span><span>{fmt(t.tva)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 800, color: T.primary }}><span>TTC</span><span>{fmt(t.ttc)}</span></div>
+      </>; })()}
     </div>
     <div style={{ marginBottom: 14 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Notes (optionnel)</label><textarea className="search-glow" style={{ width: "100%", padding: "10px 12px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated, minHeight: 70, resize: "vertical" }} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Conditions de paiement, IBAN..." /></div>
     <button className="btn-press" disabled={saving} onClick={async () => {
       const vl = ls.filter(l => l.desc.trim()); if (!vl.length || !cId) return;
-      setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, echeance, lignes: vl, notes }); setSaving(false);
+      setSaving(true); await onSave({ clientId: cId, tva: tv, typeOp, remiseType, remiseValeur, echeance, lignes: vl, notes }); setSaving(false);
     }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font, boxShadow: "0 4px 14px rgba(27,67,50,0.3)" }}>{saving ? "Enregistrement..." : "Créer la facture"}</button>
     {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
   </div>;
@@ -1655,7 +1713,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b28</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b29</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1748,7 +1806,7 @@ export default function FactuPro() {
           onSave={async d => {
             try {
               await addDevis(
-                { client_id: d.clientId, date_devis: tod(), date_validite: in30(), taux_tva: d.tva, type_operation: d.typeOp, notes: d.notes },
+                { client_id: d.clientId, date_devis: tod(), date_validite: in30(), taux_tva: d.tva, type_operation: d.typeOp, remise_type: d.remiseType, remise_valeur: d.remiseValeur, notes: d.notes },
                 d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
               );
               setDup(null); nav("devis"); fl("Devis créé ✓");
@@ -1761,7 +1819,7 @@ export default function FactuPro() {
           onSave={async d => {
             try {
               await addFactureDirecte(
-                { client_id: d.clientId, date_echeance: d.echeance, taux_tva: d.tva, type_operation: d.typeOp, notes: d.notes },
+                { client_id: d.clientId, date_echeance: d.echeance, taux_tva: d.tva, type_operation: d.typeOp, remise_type: d.remiseType, remise_valeur: d.remiseValeur, notes: d.notes },
                 d.lignes.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu }))
               );
               nav("factures"); fl("Facture créée ✓");

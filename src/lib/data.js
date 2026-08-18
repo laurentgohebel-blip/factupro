@@ -131,6 +131,8 @@ export function useDevis(entrepriseId) {
         date_validite: devisData.date_validite,
         taux_tva: devisData.taux_tva || 10,
         type_operation: devisData.type_operation || 'services',
+        remise_type: devisData.remise_type || 'montant',
+        remise_valeur: devisData.remise_valeur || 0,
         statut: 'en_attente',
         notes: devisData.notes || '',
       })
@@ -303,6 +305,8 @@ export function useFactures(entrepriseId) {
         date_echeance: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
         taux_tva: devisData.taux_tva,
         type_operation: devisData.type_operation || 'services',
+        remise_type: devisData.remise_type || 'montant',
+        remise_valeur: devisData.remise_valeur || 0,
         statut: 'envoyee',
       })
       .select()
@@ -359,23 +363,39 @@ export function useFactures(entrepriseId) {
       .single()
     if (error) throw error
 
-    const lignes = (custom && custom.montant != null)
-      ? [{
-          facture_id: data.id,
-          description: custom.motif || 'Avoir',
-          quantite: 1,
-          unite: 'forfait',
-          prix_unitaire: -Math.abs(parseFloat(custom.montant) || 0),
-          ordre: 0,
-        }]
-      : (facture.facture_lignes || []).map((l, i) => ({
-          facture_id: data.id,
-          description: l.description,
-          quantite: l.quantite,
-          unite: l.unite,
-          prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)),
-          ordre: i,
-        }))
+    let lignes
+    if (custom && custom.montant != null) {
+      lignes = [{
+        facture_id: data.id,
+        description: custom.motif || 'Avoir',
+        quantite: 1,
+        unite: 'forfait',
+        prix_unitaire: -Math.abs(parseFloat(custom.montant) || 0),
+        ordre: 0,
+      }]
+    } else {
+      lignes = (facture.facture_lignes || []).map((l, i) => ({
+        facture_id: data.id,
+        description: l.description,
+        quantite: l.quantite,
+        unite: l.unite,
+        prix_unitaire: -Math.abs(parseFloat(l.prix_unitaire)),
+        ordre: i,
+      }))
+      // Reporter la remise éventuelle : sinon on créditerait le brut au lieu du net.
+      // Les lignes ci-dessus somment à -brut ; on ajoute +remise pour obtenir -net.
+      const brut = (facture.facture_lignes || []).reduce((s, l) => s + l.quantite * l.prix_unitaire, 0)
+      const rv = parseFloat(facture.remise_valeur) || 0
+      const remAmt = Math.min(facture.remise_type === 'pourcent' ? brut * rv / 100 : rv, brut)
+      if (remAmt > 0) lignes.push({
+        facture_id: data.id,
+        description: 'Remise déduite (avoir)',
+        quantite: 1,
+        unite: 'forfait',
+        prix_unitaire: Math.abs(remAmt),
+        ordre: lignes.length,
+      })
+    }
 
     if (lignes.length) await supabase.from('facture_lignes').insert(lignes)
 
@@ -415,6 +435,8 @@ export function useFactures(entrepriseId) {
         date_echeance: factureData.date_echeance,
         taux_tva: factureData.taux_tva || 20,
         type_operation: factureData.type_operation || 'services',
+        remise_type: factureData.remise_type || 'montant',
+        remise_valeur: factureData.remise_valeur || 0,
         statut: 'envoyee',
         notes: factureData.notes || '',
       })
