@@ -21,7 +21,7 @@ const PLANS = [
   {
     name: 'Gratuit', price: '0€', period: 'pour toujours',
     color: C.border, bg: C.white,
-    features: ['3 devis / mois', '3 factures / mois', '1 client', 'PDF & email', 'Support communauté'],
+    features: ['5 devis / mois', '5 factures / mois', 'Clients illimités', 'PDF & email', 'Support communauté'],
     cta: 'Commencer gratuitement', ctaStyle: 'outline',
   },
   {
@@ -29,7 +29,7 @@ const PLANS = [
     color: C.primary, bg: C.primary,
     badge: '⭐ Le plus populaire',
     features: ['Devis illimités', 'Factures illimitées', 'Clients illimités', 'Catalogue illimité', 'Export comptable', 'Relances par email', 'Support prioritaire'],
-    cta: 'Essayer 14 jours gratuit', ctaStyle: 'solid',
+    cta: 'Passer à Pro', ctaStyle: 'solid',
   },
 ]
 
@@ -99,7 +99,7 @@ export default function Landing() {
       {/* MOCKUP / STATS BAND */}
       <section style={{ background: `linear-gradient(135deg, ${C.primary} 0%, ${C.lighter} 100%)`, padding: '40px 24px', margin: '0 0 80px' }}>
         <div style={{ maxWidth: 900, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 32, textAlign: 'center', color: '#fff' }}>
-          {[['500+', 'Utilisateurs'], ['98%', 'Satisfaction client'], ['30s', 'Pour créer un devis'], ['0€', 'Pour commencer']].map(([v, l]) => (
+          {[['30s', 'Pour créer un devis'], ['9€', '/mois sans engagement'], ['10 ans', 'Archivage légal'], ['0€', 'Pour commencer']].map(([v, l]) => (
             <div key={l}>
               <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{v}</div>
               <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>{l}</div>
