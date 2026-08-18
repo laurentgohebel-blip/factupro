@@ -283,6 +283,41 @@ export async function collectExportData() {
   return out
 }
 
+// ─── Récurrences (facturation récurrente) ───
+export function useRecurrences(entrepriseId) {
+  const [recurrences, setRecurrences] = useState([])
+
+  const load = useCallback(async () => {
+    if (!entrepriseId) return
+    const { data } = await supabase
+      .from('recurrences')
+      .select('*')
+      .eq('entreprise_id', entrepriseId)
+      .order('created_at', { ascending: false })
+    setRecurrences(data || [])
+  }, [entrepriseId])
+
+  useEffect(() => { load() }, [load])
+
+  async function addRecurrence(r) {
+    const { error } = await supabase.from('recurrences').insert({ ...r, entreprise_id: entrepriseId })
+    if (error) throw error
+    await load()
+  }
+  async function updateRecurrence(id, updates) {
+    const { error } = await supabase.from('recurrences').update(updates).eq('id', id)
+    if (error) throw error
+    await load()
+  }
+  async function deleteRecurrence(id) {
+    const { error } = await supabase.from('recurrences').delete().eq('id', id)
+    if (error) throw error
+    await load()
+  }
+
+  return { recurrences, addRecurrence, updateRecurrence, deleteRecurrence, reload: load }
+}
+
 // ─── Journal d'audit (lecture seule) ───
 export function useAudit(entrepriseId) {
   const [entries, setEntries] = useState([])

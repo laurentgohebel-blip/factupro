@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useAuth } from '../lib/auth';
-import { useClients, useDevis, useFactures, useCatalogue, useSubscription, useAudit, useClotures, collectExportData } from '../lib/data';
+import { useClients, useDevis, useFactures, useCatalogue, useSubscription, useAudit, useClotures, useRecurrences, collectExportData } from '../lib/data';
 import { supabase } from '../lib/supabase';
 
 /* ══════════════ NORMALIZERS (Supabase → UI format) ══════════════ */
@@ -27,6 +27,8 @@ function normFacture(f) {
 // Type d'opération (mention obligatoire facture 2026)
 const TYPE_OP = { biens: "Livraison de biens", services: "Prestation de services", mixte: "Opération mixte" };
 const typeOpLabel = (t) => TYPE_OP[t] || TYPE_OP.services;
+const FREQS = [{ v: "mensuelle", l: "Mensuelle" }, { v: "trimestrielle", l: "Trimestrielle" }, { v: "annuelle", l: "Annuelle" }];
+const freqLabel = (f) => (FREQS.find(x => x.v === f) || {}).l || "Mensuelle";
 // Libellé lisible d'une entrée du journal d'audit
 const auditLabel = (a) => {
   const t = a.table_name === "factures" ? "Facture" : "Devis";
@@ -1096,11 +1098,106 @@ function AvoirModal({ facture, onClose, onConfirm }) {
   );
 }
 
-function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNew }) {
+function RecurrenceForm({ clients, catalogue, onSave, onNo, init }) {
+  const [cId, setCId] = useState(init?.client_id || clients[0]?.id || "");
+  const [libelle, setLibelle] = useState(init?.libelle || "");
+  const [ls, setLs] = useState(init?.lignes?.length ? init.lignes.map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })) : [{ desc: "", qte: 1, unite: "forfait", pu: 0 }]);
+  const [tv, setTv] = useState(init?.taux_tva ?? 20);
+  const [typeOp, setTypeOp] = useState(init?.type_operation || "services");
+  const [remiseType, setRemiseType] = useState(init?.remise_type || "montant");
+  const [remiseValeur, setRemiseValeur] = useState(init?.remise_valeur || 0);
+  const [delai, setDelai] = useState(init?.delai_echeance ?? 30);
+  const [frequence, setFrequence] = useState(init?.frequence || "mensuelle");
+  const [dateDebut, setDateDebut] = useState(init?.date_debut || tod());
+  const [dateFin, setDateFin] = useState(init?.date_fin || "");
+  const [showC, setShowC] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const uL = (i, k, v) => { const n = [...ls]; n[i] = { ...n[i], [k]: k === "qte" || k === "pu" ? parseFloat(v) || 0 : v }; setLs(n); };
+  const iS = { width: "100%", padding: "8px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, fontSize: 14, fontFamily: T.font, color: T.text, outline: "none", boxSizing: "border-box", background: T.bgElevated };
+
+  return <div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}><button className="btn-press" onClick={onNo} style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${T.border}`, background: T.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>‹</button><h2 style={{ fontSize: 18, fontWeight: 700 }}>{init ? "Modifier la récurrence" : "Nouvelle récurrence"}</h2></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Libellé (interne)</label><input className="search-glow" style={iS} value={libelle} onChange={e => setLibelle(e.target.value)} placeholder="ex: Maintenance mensuelle Dupont" /></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Client</label><select className="search-glow" style={iS} value={cId} onChange={e => setCId(e.target.value)}>{clients.map(c => <option key={c.id} value={c.id}>{c.nom}</option>)}</select></div>
+    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ flex: 1 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Fréquence</label><Chips opts={FREQS} val={frequence} set={setFrequence} /></div>
+    </div>
+    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ flex: 1 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Début</label><input className="search-glow" style={iS} type="date" value={dateDebut} onChange={e => setDateDebut(e.target.value)} /></div>
+      <div style={{ flex: 1 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Fin (optionnel)</label><input className="search-glow" style={iS} type="date" value={dateFin} onChange={e => setDateFin(e.target.value)} /></div>
+    </div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>TVA</label><Chips opts={[0, 5.5, 10, 20].map(t => ({ v: t, l: t + "%" }))} val={tv} set={setTv} /></div>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 6, display: "block" }}>Type d'opération</label><Chips opts={[{ v: "services", l: "Services" }, { v: "biens", l: "Biens" }, { v: "mixte", l: "Mixte" }]} val={typeOp} set={setTypeOp} /></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase" }}>Prestations</label>
+      <button className="btn-press" onClick={() => setShowC(true)} style={{ padding: "5px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>📋 Catalogue</button>
+    </div>
+    {ls.map((l, i) => <div key={i} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 12, marginBottom: 8, boxShadow: T.shadow }}>
+      <input className="search-glow" style={{ ...iS, fontWeight: 600, marginBottom: 6 }} placeholder="Description" value={l.desc} onChange={e => uL(i, "desc", e.target.value)} />
+      <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ width: 55 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Qté</label><input className="search-glow" style={{ ...iS, padding: "6px 8px", fontSize: 13 }} type="number" value={l.qte} onChange={e => uL(i, "qte", e.target.value)} /></div>
+        <div style={{ flex: 1 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>Unité</label><select className="search-glow" style={{ ...iS, padding: "6px 8px", fontSize: 13 }} value={l.unite} onChange={e => uL(i, "unite", e.target.value)}>{["forfait","m²","ml","unité","heure","jour"].map(u => <option key={u}>{u}</option>)}</select></div>
+        <div style={{ width: 75 }}><label style={{ fontSize: 9, fontWeight: 600, color: T.textLight }}>P.U.</label><input className="search-glow" style={{ ...iS, padding: "6px 8px", fontSize: 13 }} type="number" value={l.pu} onChange={e => uL(i, "pu", e.target.value)} /></div>
+        <button onClick={() => ls.length > 1 && setLs(ls.filter((_, j) => j !== i))} style={{ alignSelf: "flex-end", background: "none", border: "none", color: T.danger, cursor: "pointer", padding: 6, fontSize: 14 }}>×</button>
+      </div>
+    </div>)}
+    <button className="btn-press" onClick={() => setLs([...ls, { desc: "", qte: 1, unite: "forfait", pu: 0 }])} style={{ width: "100%", padding: 12, borderRadius: T.radiusSm, border: `1.5px dashed ${T.border}`, background: "transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: T.font, color: T.textMuted, marginBottom: 12 }}>+ Ajouter une ligne</button>
+    <div style={{ marginBottom: 12 }}><label style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: "uppercase", marginBottom: 4, display: "block" }}>Délai de paiement (jours)</label><input className="search-glow" style={iS} type="number" value={delai} onChange={e => setDelai(parseInt(e.target.value) || 0)} /></div>
+    <div style={{ background: T.bgCard, borderRadius: T.radius, padding: 14, marginBottom: 14, boxShadow: T.shadow }}>
+      {(() => { const t = totals({ lignes: ls, tva: tv, remiseType, remiseValeur }); return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 16, fontWeight: 800, color: T.primary }}><span>TTC / échéance</span><span>{fmt(t.ttc)}</span></div>; })()}
+    </div>
+    <button className="btn-press" disabled={saving} onClick={async () => {
+      const vl = ls.filter(l => l.desc.trim()); if (!vl.length || !cId || !dateDebut) return;
+      setSaving(true);
+      await onSave({
+        client_id: cId, libelle,
+        lignes: vl.map(l => ({ description: l.desc, quantite: l.qte, unite: l.unite, prix_unitaire: l.pu })),
+        taux_tva: tv, type_operation: typeOp, remise_type: remiseType, remise_valeur: remiseValeur,
+        delai_echeance: delai, frequence, date_debut: dateDebut, date_fin: dateFin || null,
+      });
+      setSaving(false);
+    }} style={{ width: "100%", padding: 14, borderRadius: T.radiusSm, border: "none", background: saving ? T.primaryLighter : T.primary, color: "#fff", fontSize: 15, fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: T.font }}>{saving ? "Enregistrement..." : (init ? "Enregistrer" : "Créer la récurrence")}</button>
+    {showC && <CatPicker cat={catalogue} onSel={x => setLs([...ls, { desc: x.desc, qte: 1, unite: x.unite, pu: x.pu }])} onClose={() => setShowC(false)} />}
+  </div>;
+}
+
+function RecurrencesList({ recurrences, clients, factures, onNew, onEdit, onToggle, onStop }) {
+  const stMap = { active: ["Active", T.primaryPale, "#065F46"], en_pause: ["En pause", T.accentPale, "#92400E"], terminee: ["Terminée", "#F1F1EE", "#666"] };
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Récurrences ({recurrences.length})</div>
+      <button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button>
+    </div>
+    <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 14, lineHeight: 1.5 }}>Chaque échéance génère automatiquement une facture <strong>brouillon</strong> que vous validez avant envoi.</div>
+    {recurrences.length === 0 && <div style={{ textAlign: "center", padding: 30, color: T.textMuted }}><div style={{ fontSize: 36, marginBottom: 8 }}>🔁</div><div style={{ fontWeight: 600 }}>Aucune récurrence</div><div style={{ fontSize: 13, marginTop: 4 }}>Automatisez vos factures régulières</div></div>}
+    {recurrences.map(r => {
+      const cl = clients.find(c => c.id === r.client_id);
+      const nbGen = factures.filter(f => f.recurrenceId === r.id).length;
+      const st = stMap[r.statut] || stMap.active;
+      return <div key={r.id} className="card-hover" style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{r.libelle || cl?.nom || "Récurrence"}</div>
+            <div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom} · {freqLabel(r.frequence)}</div>
+            <div style={{ fontSize: 11, color: T.textLight, marginTop: 2 }}>{r.statut === "terminee" ? "Terminée" : `Prochaine : ${dfr(r.prochaine_generation)}`}{r.date_fin ? ` · Fin : ${dfr(r.date_fin)}` : ""} · {nbGen} générée(s)</div>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: st[1], color: st[2], whiteSpace: "nowrap" }}>{st[0]}</span>
+        </div>
+        {r.statut !== "terminee" && <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+          <button className="btn-press" onClick={() => onEdit(r)} style={{ padding: "6px 11px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>✏ Modifier</button>
+          <button className="btn-press" onClick={() => onToggle(r)} style={{ padding: "6px 11px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>{r.statut === "active" ? "⏸ Pause" : "▶ Reprendre"}</button>
+          <button className="btn-press" onClick={() => onStop(r)} style={{ padding: "6px 11px", borderRadius: T.radiusXs, border: `1px solid ${T.dangerPale}`, background: T.dangerPale, color: "#991B1B", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>⏹ Arrêter</button>
+        </div>}
+      </div>;
+    })}
+  </div>;
+}
+
+function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNew, onRecurrences }) {
   const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
   const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
   return <div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><div style={{ display: "flex", gap: 6 }}><button className="btn-press" onClick={onRecurrences} style={{ padding: "8px 12px", borderRadius: T.radiusSm, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🔁 Récurrences</button><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div></div>
     <Search v={q} set={setQ} /><Chips opts={[{ v: "brouillon", l: "Brouillon" }, { v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
     {f.map(x => { const cl = clients.find(c => c.id === x.clientId); return <div key={x.id} className="card-hover" onClick={() => onSelect(x)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1596,6 +1693,7 @@ export default function FactuPro() {
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
   const { entries: auditEntries } = useAudit(entreprise?.id);
   const { clotures, creerCloture } = useClotures(entreprise?.id);
+  const { recurrences, addRecurrence, updateRecurrence, deleteRecurrence } = useRecurrences(entreprise?.id);
 
   // Normalize data for UI — useMemo évite de recréer les tableaux à chaque render
   const cls = useMemo(() => rawClients.map(normClient), [rawClients]);
@@ -1615,14 +1713,15 @@ export default function FactuPro() {
   const [dup, setDup] = useState(null);
   const [editD, setEditD] = useState(null);
   const [dupF, setDupF] = useState(null);
+  const [recForm, setRecForm] = useState(null); // { } (new) | recurrence (edit)
   const [toast, setToast] = useState(null);
   const [payPick, setPayPick] = useState(null);
   const [emailModal, setEmailModal] = useState(null); // { type, doc, client, signature }
   const [avoirModal, setAvoirModal] = useState(null); // facture sélectionnée pour avoir
 
   const fl = m => { setToast(m); setTimeout(() => setToast(null), 2000); };
-  const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); setEditD(null); setDupF(null); };
-  const tab = ["nouveau_devis","nouvelle_facture","edit_devis"].includes(pg) ? pg === "nouvelle_facture" ? "factures" : "devis" : pg;
+  const nav = p => { setPg(p); setSelD(null); setSelF(null); setSelC(null); setProfC(null); setEditC(false); setDup(null); setEditD(null); setDupF(null); setRecForm(null); };
+  const tab = ["nouveau_devis","edit_devis"].includes(pg) ? "devis" : ["nouvelle_facture","recurrences","rec_form"].includes(pg) ? "factures" : pg;
   const retC = fcs.filter(f => f.statut === "en_retard").length;
 
   // ── Quota formule Gratuite : 5 devis + 5 factures / mois (illimité en Pro) ──
@@ -1771,7 +1870,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b35</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b36</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
@@ -1900,12 +1999,34 @@ export default function FactuPro() {
           }}
         />}
 
+        {pg === "recurrences" && (isPro
+          ? <RecurrencesList recurrences={recurrences} clients={cls} factures={fcs}
+              onNew={() => { setRecForm({}); setPg("rec_form"); }}
+              onEdit={r => { setRecForm(r); setPg("rec_form"); }}
+              onToggle={async r => { try { await updateRecurrence(r.id, { statut: r.statut === "active" ? "en_pause" : "active" }); fl("Mis à jour ✓"); } catch (e) { fl("Erreur: " + e.message); } }}
+              onStop={r => setConf({ m: `Arrêter la récurrence « ${r.libelle || "sans nom"} » ? Elle ne générera plus de factures.`, fn: async () => { try { await updateRecurrence(r.id, { statut: "terminee" }); fl("Récurrence arrêtée"); } catch (e) { fl("Erreur: " + e.message); } } })}
+            />
+          : <ProLock titre="Récurrences" desc="Automatisez vos factures régulières (maintenance, abonnements) : un gabarit génère une facture brouillon à chaque échéance, que vous validez avant envoi. Passez à Pro pour activer les récurrences." onUpgrade={startCheckout} />
+        )}
+
+        {pg === "rec_form" && recForm && <RecurrenceForm clients={cls} catalogue={cat} init={recForm.id ? recForm : null}
+          onNo={() => nav("recurrences")}
+          onSave={async r => {
+            try {
+              if (recForm.id) await updateRecurrence(recForm.id, r);
+              else await addRecurrence({ ...r, prochaine_generation: r.date_debut, statut: "active" });
+              nav("recurrences"); fl(recForm.id ? "Récurrence modifiée ✓" : "Récurrence créée ✓");
+            } catch (e) { fl("Erreur: " + e.message); }
+          }}
+        />}
+
         {pg === "factures" && !selF && <FacturesList factures={fcs} clients={cls}
           onSelect={f => setSelF(f)}
           onPDF={f => setPdf({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null, entreprise })}
           onEmail={f => setEmailModal({ type: "facture", doc: f, client: cls.find(c => c.id === f.clientId), signature: null })}
           onPay={id => setPayPick(id)}
           onNew={goNewFacture}
+          onRecurrences={() => nav("recurrences")}
         />}
         {pg === "factures" && selF && <FactureDetail
           facture={selF}
