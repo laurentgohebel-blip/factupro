@@ -335,7 +335,6 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
     </table>
 
     <!-- Totaux -->
-    <!-- Table imbriquée alignée à droite : Outlook desktop (moteur Word) ignore display:flex -->
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px"><tr><td align="right" style="padding:0">
       <table width="220" style="width:220px;border-collapse:collapse;text-align:left">
         <tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(brut)}</td></tr>
@@ -359,9 +358,11 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
 
   <!-- Footer -->
   <div style="padding:20px 32px;background:#f9f9f7;border-top:1px solid #eee;font-size:12px;color:#999;text-align:center">
-    ${e.nom || ""} · ${e.adresse || ""}<br>
-    Tél : ${e.tel || ""} · ${e.email || ""}<br>
-    SIRET : ${e.siret || ""}
+    ${[
+      [e.nom, e.adresse].filter(Boolean).join(" · "),
+      [e.tel ? `Tél : ${e.tel}` : "", e.email].filter(Boolean).join(" · "),
+      e.siret ? `SIRET : ${e.siret}` : "",
+    ].filter(Boolean).join("<br>\n    ")}
     <div style="margin-top:8px;font-size:11px">Envoyé via ⚡ FactuPro</div>
   </div>
 </div>
@@ -1908,7 +1909,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b39</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b40</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>

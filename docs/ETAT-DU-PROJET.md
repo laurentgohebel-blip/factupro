@@ -13,7 +13,7 @@ SaaS de **devis & facturation pour artisans français**.
 ## 2. ⚠️ À savoir avant de coder
 - **Dépôt** : `…\Documents\Dev info\Synapse\factupro-azure-free` (le projet a été déplacé ; un ancien chemin sans `Synapse` peut traîner — ignorer). Remote GitHub : `laurentgohebel-blip/factupro`.
 - **Édition GitHub directe** : le propriétaire édite parfois sur GitHub entre deux sessions → **toujours `git pull` d'abord**.
-- **Marqueur de version** : un tag `b NN` (ex. `b39`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
+- **Marqueur de version** : un tag `b NN` (ex. `b40`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
 - **`persistSession: false`** : la session Supabase est en mémoire (déconnexion au refresh). Les allers-retours externes (Stripe) stashent/restaurent la session via `sessionStorage` (voir `auth.jsx`).
 - **PDF** : la pièce jointe email côté app est en **jsPDF natif** (PAS html2canvas → il rend blanc sur mobile). Côté serveur (auto-envoi récurrent), le PDF est en **pdf-lib** (Deno, sans DOM).
 - **Ne jamais** réintroduire d'insert d'entreprise côté client après signup (RLS) → passe par le trigger `handle_new_user`.

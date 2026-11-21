@@ -39,20 +39,24 @@ function buildFrom(fromName: unknown): string {
   return `FactuPro <${FROM_ADDRESS}>`;
 }
 
-// Version texte brut à partir du HTML (une partie text/plain réduit le score spam).
+// Version texte brut à partir du HTML (une partie text/plain propre réduit
+// le score spam : les filtres comparent les deux versions du message).
 function htmlToText(html: string): string {
   return html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<(head|style|script)\b[\s\S]*?<\/\1>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/tr>/gi, "\n")
-    .replace(/<\/td>/gi, " | ")
-    .replace(/<\/th>/gi, " | ")
+    // « | » uniquement ENTRE deux cellules, jamais en fin de ligne
+    .replace(/<\/t[dh]>\s*(?=<t[dh]\b)/gi, " | ")
+    .replace(/<\/(p|div|tr|table|h[1-6])>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&euro;/g, "€")
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
