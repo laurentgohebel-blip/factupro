@@ -215,7 +215,16 @@ export function useDevis(entrepriseId) {
     })
   }
 
-  return { devis, loading, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, reload: load }
+  async function marquerEnvoye(id) {
+    const { error } = await supabase
+      .from('devis')
+      .update({ date_envoi: new Date().toISOString() })
+      .eq('id', id)
+    if (error) throw error
+    await load()
+  }
+
+  return { devis, loading, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, marquerEnvoye, reload: load }
 }
 
 // ─── Abonnement (Stripe) ───
@@ -561,5 +570,15 @@ export function useFactures(entrepriseId) {
     await load()
   }
 
-  return { factures, loading, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance, reload: load }
+  // Horodate le dernier envoi email accepté par Resend.
+  async function marquerEnvoye(id) {
+    const { error } = await supabase
+      .from('factures')
+      .update({ date_envoi: new Date().toISOString() })
+      .eq('id', id)
+    if (error) throw error
+    await load()
+  }
+
+  return { factures, loading, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance, marquerEnvoye, reload: load }
 }

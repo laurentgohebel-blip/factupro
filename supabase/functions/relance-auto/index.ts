@@ -11,7 +11,8 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("Resend email");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <noreply@synapserh.fr>";
+const FROM_ADDRESS = Deno.env.get("FROM_ADDRESS");
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || (FROM_ADDRESS ? `FactuPro <${FROM_ADDRESS}>` : null);
 const CRON_SECRET = Deno.env.get("CRON_SECRET");
 
 const THRESHOLDS = [7, 15, 30]; // jours de retard déclenchant la relance n°1/2/3
@@ -76,6 +77,7 @@ serve(async (req) => {
 
 async function sendRelance(to: string, nomClient: string, numero: string, ttc: number, jours: number, niveau: number, ent: { nom?: string; email?: string } | null) {
   if (!RESEND_API_KEY) throw new Error("RESEND_API_KEY manquant");
+  if (!FROM_EMAIL) throw new Error("FROM_ADDRESS manquant — aucun domaine d'expédition configuré");
   const intro = niveau === 1
     ? `Sauf erreur de notre part, la facture ${numero} d'un montant de ${fmt(ttc)} reste impayée à ce jour (échéance dépassée de ${jours} jours).`
     : niveau === 2

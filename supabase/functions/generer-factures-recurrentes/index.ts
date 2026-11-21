@@ -11,7 +11,8 @@ import { encodeBase64, decodeBase64 } from "https://deno.land/std@0.224.0/encodi
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CRON_SECRET = Deno.env.get("CRON_SECRET");
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("Resend email");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <noreply@synapserh.fr>";
+const FROM_ADDRESS = Deno.env.get("FROM_ADDRESS");
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || (FROM_ADDRESS ? `FactuPro <${FROM_ADDRESS}>` : null);
 
 const MONTHS: Record<string, number> = { mensuelle: 1, trimestrielle: 3, annuelle: 12 };
 const GREEN = rgb(0.106, 0.263, 0.196);
@@ -83,6 +84,7 @@ serve(async (req) => {
 
 async function envoyerFacture(r: any, numero: string, echeance: string) {
   if (!RESEND_API_KEY) throw new Error("RESEND_API_KEY manquant");
+  if (!FROM_EMAIL) throw new Error("FROM_ADDRESS manquant — aucun domaine d'expédition configuré");
   const { data: client } = await admin.from("clients").select("nom, adresse, email, siret").eq("id", r.client_id).single();
   if (!client?.email) throw new Error("client sans email");
   const { data: ent } = await admin.from("entreprises").select("nom, adresse, email, tel, siret, tva_intra, iban, logo_url").eq("id", r.entreprise_id).single();

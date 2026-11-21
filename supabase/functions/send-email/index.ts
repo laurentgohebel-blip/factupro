@@ -1,14 +1,45 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || Deno.env.get("Resend email");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "FactuPro <noreply@synapserh.fr>";
+
+// Adresse d'expédition — DOIT être sur un domaine vérifié chez Resend.
+// Aucune valeur codée en dur : une configuration absente doit échouer
+// bruyamment, pas envoyer dans le vide (incident synapserh.fr, nov. 2026).
+const FROM_ADDRESS = Deno.env.get("FROM_ADDRESS"); // ex. facturation@osmosetechnologies.fr
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL");     // ex. FactuPro <facturation@osmosetechnologies.fr>
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Génère une version texte brut à partir du HTML (évite le spam)
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+
+// Le nom d'expéditeur part dans un en-tête : on retire tout ce qui pourrait
+// casser le parsing de l'adresse ou injecter un en-tête supplémentaire.
+function cleanName(n: unknown): string {
+  return String(n ?? "")
+    .replace(/[\r\n<>";,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+}
+
+// Expéditeur affiché : le nom de l'entreprise émettrice, pas « FactuPro ».
+// Le client reçoit une facture signée par celui qui la lui envoie.
+function buildFrom(fromName: unknown): string {
+  const name = cleanName(fromName);
+  if (name && FROM_ADDRESS) return `${name} <${FROM_ADDRESS}>`;
+  if (FROM_EMAIL) return FROM_EMAIL;
+  return `FactuPro <${FROM_ADDRESS}>`;
+}
+
+// Version texte brut à partir du HTML (une partie text/plain réduit le score spam).
 function htmlToText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
@@ -33,35 +64,35 @@ serve(async (req) => {
 
   try {
     if (!RESEND_API_KEY) {
-      return new Response(JSON.stringify({ error: "RESEND_API_KEY manquant dans les secrets Supabase" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      return json({ error: "RESEND_API_KEY manquant dans les secrets Supabase" });
+    }
+    if (!FROM_ADDRESS && !FROM_EMAIL) {
+      return json({
+        error:
+          "FROM_ADDRESS (ou FROM_EMAIL) manquant dans les secrets Supabase — aucun domaine d'expédition configuré",
       });
     }
 
-    const { to, subject, html, replyTo, attachment } = await req.json();
+    const { to, subject, html, replyTo, attachment, fromName } = await req.json();
 
     if (!to || !subject || !html) {
-      return new Response(JSON.stringify({ error: "Paramètres manquants : to, subject, html requis" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return json({ error: "Paramètres manquants : to, subject, html requis" });
     }
 
-    const text = htmlToText(html);
+    const from = buildFrom(fromName);
 
     const payload: Record<string, unknown> = {
-      from: FROM_EMAIL,
+      from,
       to,
       subject,
       html,
-      text,
-      headers: {
-        "X-Entity-Ref-ID": crypto.randomUUID(),
-      },
+      text: htmlToText(html),
+      headers: { "X-Entity-Ref-ID": crypto.randomUUID() },
     };
 
     if (replyTo) payload.reply_to = replyTo;
 
-    // Pièce jointe PDF (base64)
+    // Pièce jointe PDF (base64 nu, sans préfixe data:)
     if (attachment?.content && attachment?.filename) {
       payload.attachments = [{ filename: attachment.filename, content: attachment.content }];
     }
@@ -75,24 +106,23 @@ serve(async (req) => {
       body: JSON.stringify(payload),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      return new Response(JSON.stringify({ error: data?.message || data?.name || JSON.stringify(data) }), {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // Tracé dans les logs Supabase pour diagnostic a posteriori.
+      console.error(`Resend ${res.status} from=${from} to=${to} :`, JSON.stringify(data));
+      return json({
+        error: data?.message || data?.name || `Resend ${res.status}`,
+        status: res.status,
+        from,
       });
     }
 
-    return new Response(JSON.stringify({ success: true, id: data.id }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.log(`Resend OK id=${data.id} from=${from} to=${to}`);
+    return json({ success: true, id: data.id, from });
 
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error("send-email:", err);
+    return json({ error: (err as Error).message });
   }
 });

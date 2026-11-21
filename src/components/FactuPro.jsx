@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 function normClient(c) { return c; } // same format
 function normCat(c) { return { id: c.id, cat: c.categorie, desc: c.description, unite: c.unite, pu: parseFloat(c.prix_unitaire) }; }
 function normDevis(d) {
-  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), typeOp: d.type_operation || 'services', remiseType: d.remise_type || 'montant', remiseValeur: parseFloat(d.remise_valeur) || 0, notes: d.notes || '',
+  return { id: d.numero, dbId: d.id, clientId: d.client_id, date: d.date_devis, validite: d.date_validite, statut: d.statut, signature: d.signature_url, tva: parseFloat(d.taux_tva), typeOp: d.type_operation || 'services', remiseType: d.remise_type || 'montant', remiseValeur: parseFloat(d.remise_valeur) || 0, dateEnvoi: d.date_envoi, notes: d.notes || '',
     lignes: (d.devis_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: d };
 }
@@ -17,7 +17,7 @@ function normFacture(f) {
     statut = 'en_retard';
   }
   const brouillon = f.statut === 'brouillon';
-  return { id: f.numero || (brouillon ? 'Brouillon' : ''), dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, brouillon, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, recurrenceId: f.recurrence_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, notes: f.notes || '',
+  return { id: f.numero || (brouillon ? 'Brouillon' : ''), dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, brouillon, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, recurrenceId: f.recurrence_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, dateEnvoi: f.date_envoi, notes: f.notes || '',
     relances: (f.relances || []).map(r => ({ date: r.date_relance, type: r.type })),
     lignes: (f.facture_lignes || []).sort((a,b) => a.ordre - b.ordre).map(l => ({ desc: l.description, qte: parseFloat(l.quantite), unite: l.unite, pu: parseFloat(l.prix_unitaire) })),
     _raw: f };
@@ -65,13 +65,16 @@ const ttc = (doc) => totals(doc).ttc;
 const PAIEMENTS = [{ v: "virement", l: "Virement", i: "🏦" }, { v: "cheque", l: "Chèque", i: "📝" }, { v: "especes", l: "Espèces", i: "💶" }, { v: "cb", l: "Carte", i: "💳" }];
 
 /* ══════════════ EMAIL ══════════════ */
-async function sendEmailViaResend(to, subject, html, replyTo, attachment) {
+async function sendEmailViaResend(to, subject, html, replyTo, attachment, fromName) {
   const { supabase } = await import('../lib/supabase');
   const { data, error } = await supabase.functions.invoke('send-email', {
-    body: { to, subject, html, replyTo, attachment },
+    body: { to, subject, html, replyTo, attachment, fromName },
   });
   if (error) {
-    const msg = error?.context?.json?.error || error?.message || 'Erreur inconnue';
+    // error.context est l'objet Response brut : .json est une MÉTHODE.
+    // L'ancien code lisait .json.error et jetait toujours le vrai message.
+    let msg = error?.message || 'Erreur inconnue';
+    try { const j = await error?.context?.json?.(); if (j?.error) msg = j.error; } catch { /* corps non JSON */ }
     throw new Error(msg);
   }
   if (data?.error) throw new Error(data.error);
@@ -412,9 +415,14 @@ function EmailModal({ type, doc, client, signature, entreprise, onClose, onSent,
       let attachment = null;
       if (attachPdf) {
         try { attachment = await generatePDFAttachment(type, doc, client, entreprise); }
-        catch (e) { console.warn("PDF attachment failed:", e); }
+        catch (e) {
+          // Avant : l'email partait quand même en disant « ci-joint » sans rien joindre.
+          setSending(false);
+          setError("PDF impossible à générer : " + (e?.message || "erreur inconnue") + ". Décochez la pièce jointe pour envoyer le message seul.");
+          return;
+        }
       }
-      await sendEmailViaResend(to, subject, html, replyTo, attachment);
+      await sendEmailViaResend(to, subject, html, replyTo, attachment, entreprise?.nom);
       setSent(true);
       setTimeout(() => { onClose(); onSent?.(); }, 1500);
     } catch (e) {
@@ -1201,6 +1209,9 @@ function RecurrencesList({ recurrences, clients, factures, onNew, onEdit, onTogg
 function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNew, onRecurrences }) {
   const [q, setQ] = useState(""); const [fi, setFi] = useState(null);
   const f = factures.filter(x => { const cl = clients.find(c => c.id === x.clientId); return (!q || x.id.toLowerCase().includes(q.toLowerCase()) || cl?.nom.toLowerCase().includes(q.toLowerCase())) && (!fi || x.statut === fi); });
+  // La carte entière est cliquable : chaque bouton doit stopper la propagation.
+  const stop = (fn) => (ev) => { ev.stopPropagation(); fn(); };
+  const mini = { padding: "6px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgElevated, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font };
   return <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><div style={{ display: "flex", gap: 6 }}><button className="btn-press" onClick={onRecurrences} style={{ padding: "8px 12px", borderRadius: T.radiusSm, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🔁 Récurrences</button><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div></div>
     <Search v={q} set={setQ} /><Chips opts={[{ v: "brouillon", l: "Brouillon" }, { v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
@@ -1208,6 +1219,14 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>{x.id}{x.type === "avoir" && <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "#FEF3C7", color: "#92400E" }}>AVOIR</span>}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
         <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 15, color: T.primary }}>{fmt(ttc(x))}</div><div style={{ marginTop: 4 }}><Badge statut={x.statut} /></div></div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.borderLight}` }}>
+        {!x.brouillon && <button className="btn-press" onClick={stop(() => onEmail(x))} style={mini}>✉ Envoyer</button>}
+        <button className="btn-press" onClick={stop(() => onPDF(x))} style={mini}>📄 PDF</button>
+        {!x.brouillon && x.statut !== "payee" && <button className="btn-press" onClick={stop(() => onPay(x.dbId || x.id))} style={mini}>✓ Payée</button>}
+        {!x.brouillon && <span style={{ marginLeft: "auto", fontSize: 10, fontWeight: 600, color: x.dateEnvoi ? T.primaryLight : T.textLight }}>
+          {x.dateEnvoi ? `✓ envoyé le ${dfr(x.dateEnvoi)}` : "jamais envoyé"}
+        </span>}
       </div>
     </div>; })}
   </div>;
@@ -1692,8 +1711,8 @@ const NAV_ITEMS = [
 export default function FactuPro() {
   const { entreprise, signOut, updateEntreprise } = useAuth();
   const { clients: rawClients, addClient, updateClient } = useClients(entreprise?.id);
-  const { devis: rawDevis, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, reload: reloadDevis } = useDevis(entreprise?.id);
-  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance } = useFactures(entreprise?.id);
+  const { devis: rawDevis, addDevis, updateDevis, updateDevisComplet, deleteDevis, signerDevis, marquerEnvoye: marquerDevisEnvoye, reload: reloadDevis } = useDevis(entreprise?.id);
+  const { factures: rawFactures, creerDepuisDevis, addFactureDirecte, creerAvoir, marquerPayee, validerFacture, supprimerBrouillon, envoyerRelance, marquerEnvoye: marquerFactureEnvoyee } = useFactures(entreprise?.id);
   const { catalogue: rawCat, addItem: addCatItem, updateItem: updateCatItem, deleteItem: deleteCatItem } = useCatalogue(entreprise?.id);
   const { subscription, plan, isPro, reload: reloadSub } = useSubscription(entreprise?.id);
   const { entries: auditEntries } = useAudit(entreprise?.id);
@@ -1851,7 +1870,20 @@ export default function FactuPro() {
         await signerDevis(selD.dbId, sig);
         setShowSig(false); fl("Devis signé ✓");
       }} />}
-      {emailModal && <EmailModal {...emailModal} entreprise={entreprise} onClose={() => setEmailModal(null)} />}
+      {emailModal && <EmailModal {...emailModal} entreprise={entreprise}
+        onClose={() => setEmailModal(null)}
+        onSent={async () => {
+          // Le onSent déclaré dans emailModal (relances) est écrasé par celui-ci :
+          // on le rappelle explicitement après avoir horodaté l'envoi.
+          const m = emailModal;
+          try {
+            if (m.doc?.dbId) {
+              if (m.type === "facture") await marquerFactureEnvoyee(m.doc.dbId);
+              else if (m.type === "devis") await marquerDevisEnvoye(m.doc.dbId);
+            }
+            await m.onSent?.();
+          } catch (e) { console.warn("trace envoi:", e); }
+        }} />}
       {payPick && <PayPicker onClose={() => setPayPick(null)} onSel={async mode => {
         await marquerPayee(payPick, mode);
         setPayPick(null); fl("Paiement enregistré ✓");
@@ -1875,7 +1907,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b37</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b38</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>

@@ -8,12 +8,12 @@ SaaS de **devis & facturation pour artisans français**.
 - **Front** : React 18 + Vite (SPA, React Router), PWA installable.
 - **Back** : Supabase (Postgres + RLS, Auth, Edge Functions Deno, pg_cron).
 - **Hébergement** : Azure Static Web Apps (déployé depuis la branche `main` via GitHub Actions).
-- **Emails** : Resend (domaine `synapserh.fr` vérifié). **Paiement** : Stripe (abonnement).
+- **Emails** : Resend (domaine d'envoi `osmosetechnologies.fr`, secret `FROM_ADDRESS` ; l'ancien `synapserh.fr` n'est plus utilisé). **Paiement** : Stripe (abonnement).
 
 ## 2. ⚠️ À savoir avant de coder
 - **Dépôt** : `…\Documents\Dev info\Synapse\factupro-azure-free` (le projet a été déplacé ; un ancien chemin sans `Synapse` peut traîner — ignorer). Remote GitHub : `laurentgohebel-blip/factupro`.
 - **Édition GitHub directe** : le propriétaire édite parfois sur GitHub entre deux sessions → **toujours `git pull` d'abord**.
-- **Marqueur de version** : un tag `b NN` (ex. `b37`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
+- **Marqueur de version** : un tag `b NN` (ex. `b38`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
 - **`persistSession: false`** : la session Supabase est en mémoire (déconnexion au refresh). Les allers-retours externes (Stripe) stashent/restaurent la session via `sessionStorage` (voir `auth.jsx`).
 - **PDF** : la pièce jointe email côté app est en **jsPDF natif** (PAS html2canvas → il rend blanc sur mobile). Côté serveur (auto-envoi récurrent), le PDF est en **pdf-lib** (Deno, sans DOM).
 - **Ne jamais** réintroduire d'insert d'entreprise côté client après signup (RLS) → passe par le trigger `handle_new_user`.
