@@ -15,6 +15,10 @@ function normFacture(f) {
   let statut = f.statut;
   if (statut === 'envoyee' && f.type !== 'avoir' && f.date_echeance && new Date(f.date_echeance) < new Date()) {
     statut = 'en_retard';
+  } else if (statut === 'envoyee' && !f.date_envoi) {
+    // En base, « envoyee » est posé dès l'émission (numérotation). Tant qu'aucun
+    // email n'est parti (date_envoi NULL), on affiche « Émise », pas « Envoyée ».
+    statut = 'emise';
   }
   const brouillon = f.statut === 'brouillon';
   return { id: f.numero || (brouillon ? 'Brouillon' : ''), dbId: f.id, devisId: f.devis_id, clientId: f.client_id, date: f.date_facture, echeance: f.date_echeance, statut, brouillon, tva: parseFloat(f.taux_tva), typeOp: f.type_operation || 'services', type: f.type || 'facture', origineId: f.facture_origine_id, recurrenceId: f.recurrence_id, remiseType: f.remise_type || 'montant', remiseValeur: parseFloat(f.remise_valeur) || 0, paiement: f.mode_paiement, datePaiement: f.date_paiement, dateEnvoi: f.date_envoi, notes: f.notes || '',
@@ -571,7 +575,7 @@ const T = {
 
 /* ══════════════ SMALL COMPONENTS ══════════════ */
 function Badge({ statut }) {
-  const m = { brouillon:["Brouillon","#F1F1EE","#666","#999"], en_attente:["En attente",T.accentPale,"#92400E",T.accent], accepte:["Accepté",T.primaryPale,"#065F46","#10B981"], refuse:["Refusé",T.dangerPale,"#991B1B",T.danger], payee:["Payée",T.primaryPale,"#065F46","#10B981"], en_retard:["En retard",T.dangerPale,"#991B1B",T.danger], envoyee:["Envoyée",T.infoPale,"#1E40AF",T.info], facture:["Facturé","#E0E7FF","#3730A3","#6366F1"], signe:["Signé",T.primaryPale,"#065F46","#10B981"] };
+  const m = { brouillon:["Brouillon","#F1F1EE","#666","#999"], en_attente:["En attente",T.accentPale,"#92400E",T.accent], accepte:["Accepté",T.primaryPale,"#065F46","#10B981"], refuse:["Refusé",T.dangerPale,"#991B1B",T.danger], payee:["Payée",T.primaryPale,"#065F46","#10B981"], en_retard:["En retard",T.dangerPale,"#991B1B",T.danger], emise:["Émise",T.accentPale,"#92400E",T.accent], envoyee:["Envoyée",T.infoPale,"#1E40AF",T.info], facture:["Facturé","#E0E7FF","#3730A3","#6366F1"], signe:["Signé",T.primaryPale,"#065F46","#10B981"] };
   const s = m[statut] || [statut,"#E5E7EB","#374151","#9CA3AF"];
   return <span style={{ background: s[1], color: s[2], padding: "4px 10px 4px 8px", borderRadius: 20, fontSize: 11, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: s[3], flexShrink: 0 }} />{s[0]}</span>;
 }
@@ -1216,7 +1220,7 @@ function FacturesList({ factures, clients, onSelect, onPDF, onPay, onEmail, onNe
   const mini = { padding: "6px 10px", borderRadius: T.radiusXs, border: `1px solid ${T.border}`, background: T.bgElevated, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: T.font };
   return <div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><div style={{ fontSize: 12, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: 0.8 }}>Factures ({factures.length})</div><div style={{ display: "flex", gap: 6 }}><button className="btn-press" onClick={onRecurrences} style={{ padding: "8px 12px", borderRadius: T.radiusSm, border: `1px solid ${T.border}`, background: T.bgCard, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>🔁 Récurrences</button><button className="btn-press" onClick={onNew} style={{ padding: "8px 14px", borderRadius: T.radiusSm, border: "none", background: T.primary, color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: T.font }}>+ Nouvelle</button></div></div>
-    <Search v={q} set={setQ} /><Chips opts={[{ v: "brouillon", l: "Brouillon" }, { v: "payee", l: "Payée" }, { v: "envoyee", l: "Envoyée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
+    <Search v={q} set={setQ} /><Chips opts={[{ v: "brouillon", l: "Brouillon" }, { v: "emise", l: "Émise" }, { v: "envoyee", l: "Envoyée" }, { v: "payee", l: "Payée" }, { v: "en_retard", l: "En retard" }]} val={fi} set={setFi} />
     {f.map(x => { const cl = clients.find(c => c.id === x.clientId); return <div key={x.id} className="card-hover" onClick={() => onSelect(x)} style={{ background: T.bgCard, borderRadius: T.radiusSm, padding: 14, marginBottom: 8, boxShadow: T.shadow, cursor: "pointer" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>{x.id}{x.type === "avoir" && <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "#FEF3C7", color: "#92400E" }}>AVOIR</span>}</div><div style={{ fontSize: 12, color: T.textMuted }}>{cl?.nom}</div><div style={{ fontSize: 11, color: T.textLight }}>{dfr(x.date)} — éch. {dfr(x.echeance)}</div></div>
@@ -1909,7 +1913,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b40</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b41</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>
