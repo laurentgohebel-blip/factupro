@@ -7,7 +7,7 @@
 SaaS de **devis & facturation pour artisans français**.
 - **Front** : React 18 + Vite (SPA, React Router), PWA installable.
 - **Back** : Supabase (Postgres + RLS, Auth, Edge Functions Deno, pg_cron).
-- **Hébergement** : Azure Static Web Apps (déployé depuis la branche `main` via GitHub Actions).
+- **Hébergement** : Azure Static Web Apps (déployé depuis la branche `main` via GitHub Actions). **URL de prod** : https://thankful-hill-0596efe10.8.azurestaticapps.net (app sous `/app`). L'ancienne app `calm-ocean-0b2292a10.2.azurestaticapps.net` est **abandonnée** (plus déployée depuis nov. 2026, figée sur une vieille version) — ne pas s'y fier.
 - **Emails** : Resend (domaine d'envoi `osmosetechnologies.fr`, secret `FROM_ADDRESS` ; l'ancien `synapserh.fr` n'est plus utilisé). **Paiement** : Stripe (abonnement).
 
 ## 2. ⚠️ À savoir avant de coder
@@ -63,8 +63,9 @@ Tout est regroupé et idempotent dans **`setup-complet.sql`** (à lancer en une 
 - **Idées** : remises (fait), auto-envoi récurrent (fait), avoir partiel (fait). À venir éventuel : logo hébergé (Storage) pour l'email.
 
 ## 6. Déploiement
-- **Front** : `git push origin main` → GitHub Actions build (Vite) → Azure. `staticwebapp.config.json` est dans **`public/`** (sinon les liens profonds type `/sign/*` renvoient une 404 Azure).
+- **Front** : `git push origin main` → GitHub Actions build (Vite) → Azure. **Un seul workflow : `.github/workflows/deploy.yml`** ; le secret GitHub `AZURE_STATIC_WEB_APPS_API_TOKEN` contient le jeton de déploiement de l'app `thankful-hill`. Si Azure rajoute un workflow `azure-static-web-apps-*.yml`, le supprimer (doublon, échoue : mauvais dossier de sortie et pas de variables Supabase). Erreur « No matching Static Web App was found or the api key was invalid » = jeton périmé → le recopier depuis Azure (Vue d'ensemble → Gérer le jeton de déploiement). `staticwebapp.config.json` est dans **`public/`** (sinon les liens profonds type `/sign/*` renvoient une 404 Azure).
 - **Edge Functions / SQL** : manuels via le dashboard Supabase (le CLI ne tourne pas dans l'environnement de dev).
+- **Si l'URL du site change** : mettre à jour Supabase → Authentication → URL Configuration (Site URL + Redirect URLs), le secret `APP_URL` des Edge Functions (retours Stripe : `create-checkout-session`, `customer-portal`), et réinstaller la PWA.
 
 ## 7. Docs de référence
 - `docs/CONFORMITE.md` — plan de conformité facturation électronique.
