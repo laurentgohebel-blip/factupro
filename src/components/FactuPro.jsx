@@ -335,14 +335,15 @@ function buildEmailHtml(type, doc, client, entreprise, customMessage) {
     </table>
 
     <!-- Totaux -->
-    <div style="display:flex;justify-content:flex-end;margin-bottom:20px">
-      <table style="width:220px">
+    <!-- Table imbriquée alignée à droite : Outlook desktop (moteur Word) ignore display:flex -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:20px"><tr><td align="right" style="padding:0">
+      <table width="220" style="width:220px;border-collapse:collapse;text-align:left">
         <tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(brut)}</td></tr>
         ${remise > 0 ? `<tr><td style="padding:4px 0;font-size:13px;color:#b91c1c">Remise</td><td style="padding:4px 0;font-size:13px;text-align:right;color:#b91c1c">−${fmt(remise)}</td></tr><tr><td style="padding:4px 0;font-size:13px;color:#666">Total HT net</td><td style="padding:4px 0;font-size:13px;font-weight:600;text-align:right">${fmt(ht)}</td></tr>` : ''}
         <tr><td style="padding:4px 0;font-size:13px;color:#666">TVA (${tv}%)</td><td style="padding:4px 0;font-size:13px;text-align:right;color:#666">${fmt(tva)}</td></tr>
         <tr style="border-top:2px solid #1B4332"><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332">Total TTC</td><td style="padding:8px 0;font-size:18px;font-weight:800;color:#1B4332;text-align:right">${fmt(tot)}</td></tr>
       </table>
-    </div>
+    </td></tr></table>
 
     <!-- Infos paiement -->
     ${isF ? `<div style="background:#f8f8f5;border-radius:10px;padding:14px 16px;font-size:13px;color:#555;line-height:1.7">
@@ -1907,7 +1908,7 @@ export default function FactuPro() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", position: "relative", zIndex: 2 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5, display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 22 }}>⚡</span> FactuPro</div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b38</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 1 }}>Devis & facturation · b39</div>
           </div>
           <div onClick={() => nav("profil")} style={{ textAlign: "right", cursor: "pointer" }}>
             <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9 }}>{entreprise?.nom}</div>

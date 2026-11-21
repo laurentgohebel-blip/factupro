@@ -13,7 +13,7 @@ SaaS de **devis & facturation pour artisans français**.
 ## 2. ⚠️ À savoir avant de coder
 - **Dépôt** : `…\Documents\Dev info\Synapse\factupro-azure-free` (le projet a été déplacé ; un ancien chemin sans `Synapse` peut traîner — ignorer). Remote GitHub : `laurentgohebel-blip/factupro`.
 - **Édition GitHub directe** : le propriétaire édite parfois sur GitHub entre deux sessions → **toujours `git pull` d'abord**.
-- **Marqueur de version** : un tag `b NN` (ex. `b38`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
+- **Marqueur de version** : un tag `b NN` (ex. `b39`) est affiché dans l'en-tête de l'app (sous « ⚡ FactuPro »). **À incrémenter à chaque changement front** — sert à détecter le **cache PWA** sur mobile (si le fix « ne marche pas », vérifier ce numéro avant tout).
 - **`persistSession: false`** : la session Supabase est en mémoire (déconnexion au refresh). Les allers-retours externes (Stripe) stashent/restaurent la session via `sessionStorage` (voir `auth.jsx`).
 - **PDF** : la pièce jointe email côté app est en **jsPDF natif** (PAS html2canvas → il rend blanc sur mobile). Côté serveur (auto-envoi récurrent), le PDF est en **pdf-lib** (Deno, sans DOM).
 - **Ne jamais** réintroduire d'insert d'entreprise côté client après signup (RLS) → passe par le trigger `handle_new_user`.
@@ -55,7 +55,7 @@ Tout est regroupé et idempotent dans **`setup-complet.sql`** (à lancer en une 
 - `relances-auto-quotidiennes` : à programmer (après déploiement de `relance-auto`).
 
 ## 5. Reste à faire (dépend du propriétaire)
-- **Relances auto** : déployer `relance-auto` (JWT OFF) + lancer `relances-auto-cron.sql`. Un rappel quotidien (tâche planifiée) existe.
+- **Relances auto** : **volontairement non déployées** (décision du propriétaire, nov. 2026 : coût). Ne pas déployer `relance-auto` ni lancer `relances-auto-cron.sql` sans son accord ; les relances se font à la main depuis l'app. Un rappel quotidien (tâche planifiée) existe.
 - **Attestation éditeur** : compléter/valider juridiquement/signer `docs/ATTESTATION-CONFORMITE.md`.
 - **Phase 1/2 conformité** : vrai Factur-X (PDF/A-3 + XML EN 16931) + réception + e-reporting → nécessite de **choisir une Plateforme Agréée** (cf. `docs/COMPARATIF-PA.md`).
 - **Stripe Connect** (Phase 2 paiement) : encaissement des clients de l'artisan.

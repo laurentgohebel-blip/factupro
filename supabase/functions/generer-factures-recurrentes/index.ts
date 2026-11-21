@@ -71,7 +71,14 @@ serve(async (req) => {
         const lignes = (r.lignes || []).map((l: any, i: number) => ({ facture_id: fac.id, description: l.description, quantite: l.quantite, unite: l.unite, prix_unitaire: l.prix_unitaire, ordre: i }));
         if (lignes.length) await admin.from("facture_lignes").insert(lignes);
         generated++;
-        if (r.auto_envoi) { try { await envoyerFacture(r, numero!, echeance); sent++; } catch (e) { errors.push(`envoi ${numero}: ${e.message}`); } }
+        if (r.auto_envoi) {
+          try {
+            await envoyerFacture(r, numero!, echeance); sent++;
+            // Trace l'envoi accepté par Resend (même colonne que l'envoi manuel).
+            const { error: envErr } = await admin.from("factures").update({ date_envoi: new Date().toISOString() }).eq("id", fac.id);
+            if (envErr) errors.push(`trace envoi ${numero}: ${envErr.message}`);
+          } catch (e) { errors.push(`envoi ${numero}: ${e.message}`); }
+        }
       }
 
       const next = addMonths(r.prochaine_generation, MONTHS[r.frequence] || 1);
